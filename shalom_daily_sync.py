@@ -208,40 +208,73 @@ def run():
     # 1. 自動ブラウザで社労夢から直接取得
     print("\n🚀 社労夢へリモートアクセス中...")
     with sync_playwright() as p:
-        # GitHub Actions環境（画面なし）用に調整
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(viewport={'width': 1280, 'height': 800})
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox"]
+        )
+        context = browser.new_context(
+            viewport={'width': 1280, 'height': 800},
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
         page = context.new_page()
 
         # --- ① ログイン画面を開く ---
         print("1. ログイン画面にアクセス中...")
         try:
-            page.goto("https://4ever.shalom-house.jp/login", wait_until="networkidle", timeout=60000)
-        except Exception:
-            page.goto("https://4ever.shalom-house.jp/login")
-        page.wait_for_timeout(3000)
+            page.goto("https://4ever.shalom-house.jp/login", wait_until="domcontentloaded", timeout=60000)
+        except Exception as e:
+            print(f"   --> ページ読み込み警告: {e}")
+        
+        page.wait_for_timeout(5000)
 
-        # ID入力
-        print(f"1. IDを入力中... ({SHALOM_ID})")
-        id_field = page.locator("input[type='text'], input[name*='id'], input[name*='user'], input:not([type='password']):not([type='hidden'])").first
-        id_field.wait_for(state="visible", timeout=30000)
-        id_field.click()
-        id_field.press("Control+A")
-        id_field.press("Backspace")
-        id_field.type(SHALOM_ID, delay=50)
+        # ターゲットコンテキスト（画面直下かiframe内か）の検索
+        target_frame = page
+        print("   --> ログイン入力フォームの検出を開始します...")
+        
+        # 画面内またはiframe内に input タグが存在するか最大60秒待機
+        found = False
+        for _ in range(12):
+            if page.locator("input").count() > 0:
+                found = True
+                break
+            for frame in page.frames:
+                if frame.locator("input").count() > 0:
+                    target_frame = frame
+                    found = True
+                    print("   --> iframe 内にログインフォームを検出しました。")
+                    break
+            if found:
+                break
+            page.wait_for_timeout(5000)
+
+        # ID入力フィールドの取得（最も幅広く探索）
+        id_field = target_frame.locator("input[type='text'], input[type='email'], input[name*='id'], input[name*='user'], input:not([type='password']):not([type='hidden'])").first
+
+        try:
+            id_field.wait_for(state="attached", timeout=30000)
+            print(f"1. IDを入力中... ({SHALOM_ID})")
+            id_field.click(force=True)
+            id_field.press("Control+A")
+            id_field.press("Backspace")
+            id_field.type(SHALOM_ID, delay=50)
+        except Exception as err:
+            print(f"❌ ID入力フィールドの検出に失敗しました: {err}")
+            print(f"   現在のページタイトル: {page.title()}")
+            print(f"   検出されたinputタグの数: {page.locator('input').count()}")
+            raise err
 
         # パスワード入力
         print("2. パスワードを入力中...")
-        pass_field = page.locator("input[type='password']").first
-        pass_field.wait_for(state="visible", timeout=10000)
-        pass_field.click()
+        pass_field = target_frame.locator("input[type='password']").first
+        pass_field.wait_for(state="attached", timeout=10000)
+        pass_field.click(force=True)
         pass_field.press("Control+A")
         pass_field.press("Backspace")
         pass_field.type(SHALOM_PASS, delay=50)
 
         # ログインボタンクリック
         print("3. ログインボタンをクリックします...")
-        login_btn = page.locator("button[type='submit'], input[type='submit'], button:has-text('ログイン')").first
+        login_btn = target_frame.locator("button[type='submit'], input[type='submit'], button:has-text('ログイン'), input[value='ログイン']").first
         login_btn.click()
 
         # --- ② 2FA認証 ---
