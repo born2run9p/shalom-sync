@@ -6,13 +6,13 @@ import gspread
 from datetime import datetime
 
 # ==========================================
-# 設定情報（環境変数または直書き）
+# 設定情報
 # ==========================================
 SHALOM_SHEET1_KEY = os.environ.get("SHALOM_SHEET1_KEY", "社労夢シート1のID")
 SHALOM_SHEET2_KEY = os.environ.get("SHALOM_SHEET2_KEY", "社労夢シート2のID")
 TARGET_SPREADSHEET_KEY = os.environ.get("TARGET_SPREADSHEET_KEY", "12drmIzzXsTyx_16TBOzTWxMygNrBuQv_r-8HSnT_V34")
 
-# Service Account キー（ローカル実行用の fallback / クラウド実行時は環境変数から取得）
+# Service Account キー
 JSON_KEY_FILE = "service-account-key.json"
 
 def get_gspread_client():
@@ -45,10 +45,28 @@ def run():
     
     # 2つのシートのデータを統合（申請番号をキーに重複排除）
     combined_data = {}
-    for row in data_sheet1 + data_sheet2:
+    
+    # シート1の読み込み
+    for row in data_sheet1:
         shinsei_no = str(row.get("申請番号", "")).strip()
         if shinsei_no:
-            combined_data[shinsei_no] = row
+            combined_data[shinsei_no] = {
+                "title": str(row.get("手続名称", row.get("手続き名", ""))).strip(),
+                "status": str(row.get("現在状況", "")).strip(),
+                "doc_status": str(row.get("公文書保管完了", "")).strip(),
+                "raw": row
+            }
+
+    # シート2の読み込み（重複がある場合は上書き、または追加）
+    for row in data_sheet2:
+        shinsei_no = str(row.get("申請番号", "")).strip()
+        if shinsei_no:
+            combined_data[shinsei_no] = {
+                "title": str(row.get("手続名称", row.get("手続き名", ""))).strip(),
+                "status": str(row.get("現在状況", "")).strip(),
+                "doc_status": str(row.get("公文書保管完了", "")).strip(),
+                "raw": row
+            }
 
     print(f"   --> 社労夢データの統合完了: 合計 {len(combined_data)} 件")
 
@@ -83,31 +101,42 @@ def run():
     all_rows = []
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    for s_no, row in combined_data.items():
-        title = str(row.get("手続名称", row.get("手続き名", ""))).strip()
-        curr_status = str(row.get("ステータス", row.get("現在のステータス", ""))).strip()
-        
-        curr_doc_status = str(row.get("公文書取得状況", row.get("公文書", "未取得"))).strip()
+    for s_no, item in combined_data.items():
+        title = item["title"]
+        curr_status = item["status"]
+        curr_doc_status = item["doc_status"]
         if not curr_doc_status:
             curr_doc_status = "未取得"
 
         prev_info = prev_map.get(s_no, {"status": "新規", "doc_status": "未取得"})
         prev_status = prev_info["status"]
 
-        # --- 条件判定 ---
-        is_changed = (prev_status != "新規" and prev_status != curr_status) # ① ステータス変化あり
-        is_not_finished = ("終了" not in curr_status)                       # ② 「終了」以外
-        is_doc_unobtained = ("終了" in curr_status and "取得済" not in curr_doc_status and "完了" not in curr_doc_status) # ③ 「終了」だが公文書未取得
+        # ---------------------------------------------------------
+        # 【厳密判定】除外対象判定
+        # シート1: 「現在状況」が「手続終了」 かつ 「公文書保管完了」が「済」
+        # シート2: 「現在状況」が「終了」 かつ 「公文書保管完了」が「保存済み」
+        # ---------------------------------------------------------
+        is_sheet1_completed = (curr_status == "手続終了" and curr_doc_status == "済")
+        is_sheet2_completed = (curr_status == "終了" and curr_doc_status == "保存済み")
+        
+        # どちらかの完了パターンに当てはまれば「完全終了（除外）」
+        is_fully_completed = is_sheet1_completed or is_sheet2_completed
 
-        # 全件用データに追加
+        # 全件用データには必ず追加
         all_rows.append([s_no, title, curr_status, curr_doc_status, now_str])
 
-        # 条件に合致する場合はピックアップ用データに追加
-        if is_changed or is_not_finished or is_doc_unobtained:
+        # 【ピックアップ条件】「完全終了」ではないもの、または前回からステータスが変わったもの
+        is_changed = (prev_status != "新規" and prev_status != curr_status)
+
+        if not is_fully_completed or is_changed:
             reasons = []
-            if is_changed: reasons.append("ステータス変更")
-            if is_not_finished: reasons.append("進行中")
-            if is_doc_unobtained: reasons.append("公文書未取得")
+            if is_changed:
+                reasons.append("ステータス変更")
+            if not is_fully_completed:
+                if "終了" not in curr_status:
+                    reasons.append("進行中")
+                else:
+                    reasons.append("公文書未取得/未保管")
 
             pickup_rows.append([
                 s_no,
