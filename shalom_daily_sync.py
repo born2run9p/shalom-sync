@@ -6,11 +6,11 @@ import gspread
 from datetime import datetime
 
 # ==========================================
-# 設定情報
+# 設定情報 (ご自身のスプレッドシートIDを直接入れる)
 # ==========================================
-SHALOM_SHEET1_KEY = os.environ.get("SHALOM_SHEET1_KEY", "社労夢シート1のID")
-SHALOM_SHEET2_KEY = os.environ.get("SHALOM_SHEET2_KEY", "社労夢シート2のID")
-TARGET_SPREADSHEET_KEY = os.environ.get("TARGET_SPREADSHEET_KEY", "12drmIzzXsTyx_16TBOzTWxMygNrBuQv_r-8HSnT_V34")
+SHALOM_SHEET1_KEY = os.environ.get("SHALOM_SHEET1_KEY") or "14IbYjp3hizNBbb_h0wqu5H217U4UrU5-KKh0DX_QVtk"
+SHALOM_SHEET2_KEY = os.environ.get("SHALOM_SHEET2_KEY") or "1TrGFfFzDzaPaxafgUeKHfsmhvqMs98-xSB-sl7LRrBw"
+TARGET_SPREADSHEET_KEY = os.environ.get("TARGET_SPREADSHEET_KEY") or "12drmIzzXsTyx_16TBOzTWxMygNrBuQv_r-8HSnT_V34"
 
 # Service Account キー
 JSON_KEY_FILE = "service-account-key.json"
@@ -27,11 +27,14 @@ def get_gspread_client():
 def fetch_sheet_data(gc, key):
     """スプレッドシートからデータを取得"""
     try:
+        print(f"   --> シート(ID: {key}) を読み込み中...")
         sh = gc.open_by_key(key)
         ws = sh.sheet1
-        return ws.get_all_records()
+        data = ws.get_all_records()
+        print(f"   --> {len(data)} 件のデータを取得しました。")
+        return data
     except Exception as e:
-        print(f"シート(ID: {key})の取得エラー: {e}")
+        print(f"❌ シート(ID: {key})の取得エラー: {e}")
         return []
 
 def run():
@@ -43,6 +46,10 @@ def run():
     data_sheet1 = fetch_sheet_data(gc, SHALOM_SHEET1_KEY)
     data_sheet2 = fetch_sheet_data(gc, SHALOM_SHEET2_KEY)
     
+    if not data_sheet1 and not data_sheet2:
+        print("❌ 両方のシートからデータを取得できませんでした。処理を中断します。")
+        raise Exception("社労夢データの取得に失敗しました。シートIDやサービスアカウントの共有権限を確認してください。")
+
     # 2つのシートのデータを統合（申請番号をキーに重複排除）
     combined_data = {}
     
@@ -57,7 +64,7 @@ def run():
                 "raw": row
             }
 
-    # シート2の読み込み（重複がある場合は上書き、または追加）
+    # シート2の読み込み
     for row in data_sheet2:
         shinsei_no = str(row.get("申請番号", "")).strip()
         if shinsei_no:
@@ -111,21 +118,15 @@ def run():
         prev_info = prev_map.get(s_no, {"status": "新規", "doc_status": "未取得"})
         prev_status = prev_info["status"]
 
-        # ---------------------------------------------------------
-        # 【厳密判定】除外対象判定
-        # シート1: 「現在状況」が「手続終了」 かつ 「公文書保管完了」が「済」
-        # シート2: 「現在状況」が「終了」 かつ 「公文書保管完了」が「保存済み」
-        # ---------------------------------------------------------
+        # --- 除外対象判定 ---
         is_sheet1_completed = (curr_status == "手続終了" and curr_doc_status == "済")
         is_sheet2_completed = (curr_status == "終了" and curr_doc_status == "保存済み")
-        
-        # どちらかの完了パターンに当てはまれば「完全終了（除外）」
         is_fully_completed = is_sheet1_completed or is_sheet2_completed
 
-        # 全件用データには必ず追加
+        # 全件用データ
         all_rows.append([s_no, title, curr_status, curr_doc_status, now_str])
 
-        # 【ピックアップ条件】「完全終了」ではないもの、または前回からステータスが変わったもの
+        # ピックアップ用データ
         is_changed = (prev_status != "新規" and prev_status != curr_status)
 
         if not is_fully_completed or is_changed:
@@ -159,7 +160,7 @@ def run():
     all_headers = [["申請番号", "手続名称", "現在のステータス", "公文書取得状況", "最終更新日時"]]
     ws_all.update(range_name='A1', values=all_headers + all_rows)
 
-    print(f"★ 更新完了: ピックアップ({len(pickup_rows)}件) / 全件({len(all_rows)}件)")
+    print(f"★ 更新成功！ ピックアップ({len(pickup_rows)}件) / 全件({len(all_rows)}件)")
 
 if __name__ == "__main__":
     run()
