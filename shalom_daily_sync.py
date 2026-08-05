@@ -34,7 +34,7 @@ def fetch_sheet_data(gc, key):
         return []
 
 def extract_value(row, possible_keys):
-    """複数考えられる列名から値を抽出し、トリムする関数"""
+    """複数考えられる列名から値を抽出する関数"""
     for k in possible_keys:
         if k in row and row[k] is not None:
             val = str(row[k]).strip()
@@ -58,18 +58,22 @@ def run():
     all_rows = []
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    # 2. シート1の処理（到達番号 -> 番号）
+    # 2. シート1の処理（電子申請：到達番号のみ拾う）
+    count_sheet1 = 0
     for row in data_sheet1:
-        number = extract_value(row, ["到達番号", "申請番号", "番号"])
-        if not number:
-            continue
-            
         office = extract_value(row, ["事業所名", "事業所"])
-        kind = extract_value(row, ["種別"])
         title = extract_value(row, ["手続名", "手続名称", "手続き名"])
+        
+        # 事業所名も手続名もない空行はスキップ
+        if not office and not title:
+            continue
+
+        # 到達番号のみを取得
+        number = extract_value(row, ["到達番号"])
+        kind = extract_value(row, ["種別"])
         insured = extract_value(row, ["被保険者名", "被保険者"])
         status = extract_value(row, ["現在状況", "ステータス", "状況"])
-        status_date = extract_value(row, ["現在状況 日時", "現在状況日時", "日時"])
+        status_date = extract_value(row, ["現在状況 日時", "現在状況日時", "現在状況 日時", "日時"])
 
         all_rows.append([
             number,
@@ -79,22 +83,27 @@ def run():
             insured,
             status,
             status_date,
-            "シート1",
+            "電子申請",
             now_str
         ])
+        count_sheet1 += 1
 
-    # 3. シート2の処理（受付番号 -> 番号）
+    # 3. シート2の処理（マイナ申請：受付番号のみ拾う）
+    count_sheet2 = 0
     for row in data_sheet2:
-        number = extract_value(row, ["受付番号", "申請番号", "番号"])
-        if not number:
+        office = extract_value(row, ["事業所名", "事業所"])
+        title = extract_value(row, ["手続名", "手続名称", "手続き名"])
+        
+        # 事業所名も手続名もない空行はスキップ
+        if not office and not title:
             continue
 
-        office = extract_value(row, ["事業所名", "事業所"])
+        # 受付番号のみを取得
+        number = extract_value(row, ["受付番号"])
         kind = extract_value(row, ["種別"])
-        title = extract_value(row, ["手続名", "手続名称", "手続き名"])
         insured = extract_value(row, ["被保険者名", "被保険者"])
         status = extract_value(row, ["現在状況", "ステータス", "状況"])
-        status_date = extract_value(row, ["現在状況 日時", "現在状況日時", "日時"])
+        status_date = extract_value(row, ["現在状況 日時", "現在状況日時", "現在状況 日時", "日時"])
 
         all_rows.append([
             number,
@@ -104,11 +113,12 @@ def run():
             insured,
             status,
             status_date,
-            "シート2",
+            "マイナ申請",
             now_str
         ])
+        count_sheet2 += 1
 
-    print(f"   --> データ抽出完了: 合計 {len(all_rows)} 件")
+    print(f"   --> データ抽出完了: 電子申請 {count_sheet1}件 / マイナ申請 {count_sheet2}件 (合計 {len(all_rows)}件)")
 
     # 4. 出力先シート準備
     target_sh = gc.open_by_key(TARGET_SPREADSHEET_KEY)
