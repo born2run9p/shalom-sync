@@ -205,38 +205,48 @@ def run():
     data_ea1100w = []
     data_mp0002w = []
 
-    # 1. 自動ブラウザで社労夢から直接取得 (ヘッドレスモード: headless=True)
+    # 1. 自動ブラウザで社労夢から直接取得
     print("\n🚀 社労夢へリモートアクセス中...")
     with sync_playwright() as p:
-        # GitHub Actions環境では headless=True にします
+        # GitHub Actions環境（画面なし）用に調整
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(viewport={'width': 1280, 'height': 800})
         page = context.new_page()
 
-        # --- ① ログイン ---
-        page.goto("https://4ever.shalom-house.jp/login")
+        # --- ① ログイン画面を開く ---
+        print("1. ログイン画面にアクセス中...")
+        try:
+            page.goto("https://4ever.shalom-house.jp/login", wait_until="networkidle", timeout=60000)
+        except Exception:
+            page.goto("https://4ever.shalom-house.jp/login")
         page.wait_for_timeout(3000)
 
+        # ID入力
         print(f"1. IDを入力中... ({SHALOM_ID})")
-        id_field = page.locator("input[type='text'], input:not([type='password']):not([type='hidden'])").first
+        id_field = page.locator("input[type='text'], input[name*='id'], input[name*='user'], input:not([type='password']):not([type='hidden'])").first
+        id_field.wait_for(state="visible", timeout=30000)
         id_field.click()
         id_field.press("Control+A")
         id_field.press("Backspace")
         id_field.type(SHALOM_ID, delay=50)
 
+        # パスワード入力
         print("2. パスワードを入力中...")
         pass_field = page.locator("input[type='password']").first
+        pass_field.wait_for(state="visible", timeout=10000)
         pass_field.click()
         pass_field.press("Control+A")
         pass_field.press("Backspace")
         pass_field.type(SHALOM_PASS, delay=50)
 
+        # ログインボタンクリック
         print("3. ログインボタンをクリックします...")
-        page.locator("button[type='submit'], input[type='submit'], button:has-text('ログイン')").first.click()
+        login_btn = page.locator("button[type='submit'], input[type='submit'], button:has-text('ログイン')").first
+        login_btn.click()
 
         # --- ② 2FA認証 ---
         print("4. 二要素認証（2FA）画面の待機中...")
-        page.wait_for_selector("input[type='tel'], input[type='number'], input[name*='otp'], input[name*='code'], input", timeout=15000)
+        page.wait_for_selector("input[type='tel'], input[type='number'], input[name*='otp'], input[name*='code'], input", timeout=20000)
         page.wait_for_timeout(1000)
 
         totp = pyotp.TOTP(TOTP_SECRET)
