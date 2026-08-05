@@ -1,0 +1,28 @@
+name: Shalom Daily Sync
+
+on:
+  schedule:
+    # JST 午前0:00 (UTC 15:00) に毎日実行
+    - cron: '0 15 * * *'
+  workflow_dispatch: # 手動実行ボタン
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: リポジトリをチェックアウト
+        uses: actions/checkout@v3
+
+      - name: Python環境のセットアップ
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: ライブラリのインストール
+        run: |
+          pip install -r requirements.txt
+
+      - name: スクリプト実行
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        run: python shalom_daily_sync.py
