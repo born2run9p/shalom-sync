@@ -1,31 +1,37 @@
-name: Shalom Daily Sync
+name: Run Shalom Daily Sync
 
 on:
   schedule:
-    # JST 午前0:00 (UTC 15:00) に毎日実行
-    - cron: '0 15 * * *'
-  workflow_dispatch: # 手動実行ボタン
+    - cron: '0 23 * * *'
+  workflow_dispatch:
 
 jobs:
-  build:
+  run-sync:
     runs-on: ubuntu-latest
     steps:
-      - name: リポジトリをチェックアウト
-        uses: actions/checkout@v4.2.2
+      - name: リポジトリのチェックアウト
+        uses: actions/checkout@v3
 
       - name: Python環境のセットアップ
-        uses: actions/setup-python@v5.3.0
+        uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      - name: ライブラリのインストール
+      - name: 依存ライブラリのインストール
         run: |
-          pip install -r requirements.txt
+          python -m pip install --upgrade pip
+          pip install gspread google-auth playwright pyotp
 
-      - name: スクリプト実行
+      - name: Playwrightブラウザのインストール
+        run: |
+          npx playwright install chromium --with-deps
+
+      - name: 定期同期スクリプトの実行
         env:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
-          SHALOM_SHEET1_KEY: ${{ secrets.SHALOM_SHEET1_KEY }}
-          SHALOM_SHEET2_KEY: ${{ secrets.SHALOM_SHEET2_KEY }}
           TARGET_SPREADSHEET_KEY: ${{ secrets.TARGET_SPREADSHEET_KEY }}
-        run: python shalom_daily_sync.py
+          SHALOM_ID: ${{ secrets.SHALOM_ID }}
+          SHALOM_PASS: ${{ secrets.SHALOM_PASS }}
+          TOTP_SECRET: ${{ secrets.TOTP_SECRET }}
+        run: |
+          python shalom_daily_sync.py
