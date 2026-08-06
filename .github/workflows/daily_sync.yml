@@ -3,7 +3,7 @@ name: Shalom Daily Sync
 on:
   schedule:
     - cron: '0 22 * * *' # 毎日JST AM7:00 (UTC 22:00)
-  workflow_dispatch:     # 手動実行（Run workflow）用
+  workflow_dispatch:     # 手動実行用
 
 jobs:
   sync:
