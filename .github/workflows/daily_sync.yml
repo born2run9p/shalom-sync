@@ -21,12 +21,13 @@ jobs:
       - name: Install Playwright Browsers
         run: npx playwright install chromium --with-deps
 
-      # Google 認証キーファイルを一時作成するステップ (utf8 に修正)
+      # Google 認証キーファイルを一時作成するステップ (BOM無し UTF-8)
       - name: Create Google Service Account Key
         env:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
         run: |
-          $env:GCP_SA_KEY | Out-File -FilePath "service-account-key.json" -Encoding utf8
+          $utf8NoBom = New-Object System.Text.UTF8Encoding $False
+          [System.IO.File]::WriteAllText("service-account-key.json", $env:GCP_SA_KEY, $utf8NoBom)
 
       - name: Run sync script
         env:
