@@ -14,12 +14,18 @@ SHALOM_ID = os.environ.get("SHALOM_ID") or "145371-01"
 SHALOM_PASS = os.environ.get("SHALOM_PASS") or "Vy0h119900"
 TOTP_SECRET = os.environ.get("TOTP_SECRET") or "ZJ276V7UI5G5JEE6"
 
-# 共有いただいたスプレッドシートのIDを指定
+# ご指定のターゲットスプレッドシートID
 TARGET_SPREADSHEET_KEY = (
     os.environ.get("TARGET_SPREADSHEET_KEY")
-    or "1TrGFfFzDzaPaxafgUeKHfsmhvqMs98-xSB-sl7LRrBw"
+    or "12drmIzzXsTyx_16TBOzTWxMygNrBuQv_r-8HSnT_V34"
 )
 JSON_KEY_FILE = "service-account-key.json"
+
+# GID による各シートの定義
+GID_EGOV = "910840628"  # 電子申請シート
+GID_MYNA = "1520113795"  # マイナ申請シート
+GID_ALL = "368650283"  # 全件統合一覧シート
+GID_PENDING = "282241935"  # 未完了・対応必要シート
 
 
 def get_gspread_client():
@@ -29,6 +35,17 @@ def get_gspread_client():
     return gspread.service_account_from_dict(key_dict)
   else:
     return gspread.service_account(filename=JSON_KEY_FILE)
+
+
+def get_worksheet_by_gid(sh, gid, fallback_title):
+  """GIDをもとにワークシートを取得（見つからない場合は新規作成）"""
+  for ws in sh.worksheets():
+    if str(ws.id) == str(gid):
+      return ws
+  try:
+    return sh.worksheet(fallback_title)
+  except Exception:
+    return sh.add_worksheet(title=fallback_title, rows=1000, cols=12)
 
 
 # ------------------------------------------
@@ -194,32 +211,36 @@ def scrape_table_data(page, url_name):
 def parse_table_to_integrated_rows(
     raw_table, number_target_name, data_source_label, now_str
 ):
-  """取得した二次元リストから必要な列のみをピンポイントで抽出する"""
+  """取得した二次元リストから必要な列（公文書保管完了を含む10項目）を抽出する"""
   if not raw_table or len(raw_table) < 2:
     return []
 
   headers = [str(h).strip() for h in raw_table[0]]
   rows = raw_table[1:]
 
-  def get_val(row, target_name):
-    for idx, h in enumerate(headers):
-      if h == target_name:
-        if idx < len(row):
-          v = str(row[idx]).strip()
-          if v:
-            return v
+  def get_val(row, target_names):
+    if isinstance(target_names, str):
+      target_names = [target_names]
+    for target_name in target_names:
+      for idx, h in enumerate(headers):
+        if h == target_name:
+          if idx < len(row):
+            v = str(row[idx]).strip()
+            if v:
+              return v
     return ""
 
   parsed_rows = []
   for row in rows:
-    office = get_val(row, "事業所名")
-    title = get_val(row, "手続名") or get_val(row, "手続名称")
+    office = get_val(row, ["事業所名", "事業所"])
+    title = get_val(row, ["手続名", "手続名称", "手続き名"])
     number = get_val(row, number_target_name)
     kind = get_val(row, "種別")
     insured = get_val(row, "被保険者名")
-    status = get_val(row, "現在状況")
-    status_date = get_val(row, "現在状況 日時") or get_val(
-        row, "現在状況日時"
+    status = get_val(row, ["現在状況", "状況"])
+    status_date = get_val(row, ["現在状況 日時", "現在状況日時", "日時"])
+    doc_archived = get_val(
+        row, ["公文書保管完了", "公文書保管", "公文書", "保管状況"]
     )
 
     if any([number, office, title, status]):
@@ -233,9 +254,21 @@ def parse_table_to_integrated_rows(
           status_date,
           data_source_label,
           now_str,
+          doc_archived,  # 10列目：公文書保管完了
       ])
 
   return parsed_rows
+
+
+def is_finished_and_archived(row):
+  """現在状況が『終了/完了』かつ公文書保管完了が『済』かどうかを判定"""
+  status = str(row[5]).strip()
+  doc_archived = str(row[9]).strip()
+
+  is_status_done = any(k in status for k in ["終了", "完了"])
+  is_doc_done = doc_archived in ["済", "完了", "〇", "○", "OK", "ok", "1", "True"]
+
+  return is_status_done and is_doc_done
 
 
 # ------------------------------------------
@@ -310,8 +343,6 @@ def run():
       id_field.type(SHALOM_ID, delay=50)
     except Exception as err:
       print(f"❌ ID入力フィールドの検出に失敗しました: {err}")
-      print(f"   現在のページタイトル: {page.title()}")
-      print(f"   検出されたinputタグの数: {page.locator('input').count()}")
       raise err
 
     print("2. パスワードを入力中...")
@@ -386,17 +417,20 @@ def run():
   )
 
   all_rows = rows_sheet1 + rows_sheet2
+  pending_rows = [r for r in all_rows if not is_finished_and_archived(r)]
+
   print(
       f"\n📊 統合完了: 電子申請 {len(rows_sheet1)}件 / マイナ申請 {len(rows_sheet2)}件"
       f" (合計 {len(all_rows)}件)"
   )
+  print(f"📌 未完了・対応必要データ: {len(pending_rows)}件")
 
   if not all_rows:
     print("⚠️ 取得されたデータが0件でした。書き込みをスキップします。")
     return
 
-  # 3. Googleスプレッドシートへの書き込み
-  print("7. スプレッドシートへ書き込み中...")
+  # 3. 各シートへの書き込み処理
+  print("\n7. スプレッドシート各シートへ書き込み中...")
   gc = get_gspread_client()
   target_sh = gc.open_by_key(TARGET_SPREADSHEET_KEY)
 
@@ -410,50 +444,45 @@ def run():
       "現在状況 日時",
       "データ元",
       "最終更新日時",
+      "公文書保管完了",
   ]]
 
-  # --- ① 全件統合一覧 ---
-  try:
-    ws_all = target_sh.worksheet("全件統合一覧")
-  except Exception:
-    ws_all = target_sh.add_worksheet(title="全件統合一覧", rows=1000, cols=10)
+  # ① 電子申請シート (gid=910840628)
+  ws_egov = get_worksheet_by_gid(target_sh, GID_EGOV, "e-Gov-check")
+  ws_egov.clear()
+  ws_egov.update(headers + rows_sheet1, "A1")
+  print(
+      f"  --> [1/4] 電子申請シート (gid:{GID_EGOV}) に {len(rows_sheet1)} 件更新"
+  )
+
+  # ② マイナ申請シート (gid=1520113795)
+  ws_myna = get_worksheet_by_gid(target_sh, GID_MYNA, "myna -check")
+  ws_myna.clear()
+  ws_myna.update(headers + rows_sheet2, "A1")
+  print(
+      f"  --> [2/4] マイナ申請シート (gid:{GID_MYNA}) に {len(rows_sheet2)} 件更新"
+  )
+
+  # ③ 全件統合一覧シート (gid=368650283)
+  ws_all = get_worksheet_by_gid(target_sh, GID_ALL, "全件統合一覧")
   ws_all.clear()
   ws_all.update(headers + all_rows, "A1")
-  print(f"  --> 『全件統合一覧』に {len(all_rows)} 件更新しました。")
+  print(
+      f"  --> [3/4] 全件統合一覧 (gid:{GID_ALL}) に {len(all_rows)} 件更新"
+  )
 
-  # --- ② マイナ申請 (myna -check シート) ---
-  if rows_sheet2:
-    ws_myna = None
-    for sheet_name in ["myna -check", "myna-check", "マイナ申請"]:
-      try:
-        ws_myna = target_sh.worksheet(sheet_name)
-        break
-      except Exception:
-        pass
+  # ④ 未完了・対応必要一覧シート (gid=282241935)
+  ws_pending = get_worksheet_by_gid(
+      target_sh, GID_PENDING, "未完了・対応必要一覧"
+  )
+  ws_pending.clear()
+  ws_pending.update(headers + pending_rows, "A1")
+  print(
+      f"  --> [4/4] 未完了・対応必要一覧 (gid:{GID_PENDING}) に"
+      f" {len(pending_rows)} 件更新"
+  )
 
-    if not ws_myna:
-      ws_myna = target_sh.add_worksheet(title="myna -check", rows=500, cols=10)
-
-    ws_myna.clear()
-    ws_myna.update(headers + rows_sheet2, "A1")
-    print(f"  --> 『myna -check』に {len(rows_sheet2)} 件更新しました。")
-
-  # --- ③ 電子申請 (e-Gov-check シート) ---
-  if rows_sheet1:
-    ws_egov = None
-    for sheet_name in ["e-Gov-check", "e-Gov -check", "電子申請"]:
-      try:
-        ws_egov = target_sh.worksheet(sheet_name)
-        break
-      except Exception:
-        pass
-
-    if ws_egov:
-      ws_egov.clear()
-      ws_egov.update(headers + rows_sheet1, "A1")
-      print(f"  --> 『e-Gov-check』に {len(rows_sheet1)} 件更新しました。")
-
-  print("★ 完全リモート更新成功！すべてのシートにデータを同期しました。")
+  print("\n★ 完全リモート更新成功！すべてのシートへの振り分けが完了しました。")
 
 
 if __name__ == "__main__":
