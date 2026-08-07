@@ -4,6 +4,7 @@ import sys
 import json
 import time
 import datetime
+import re
 import pyotp
 import gspread
 import pandas as pd
@@ -237,18 +238,63 @@ def scrape_table_data(page, url_name):
 
 
 def format_datetime_str(val):
-    """文字列を yyyy/mm/dd hh:mm:ss 形式に変換する補助関数"""
+    """和暦（令和/平成/R/H）を含む文字列を yyyy/mm/dd hh:mm:ss 形式に変換する関数"""
     if not val or pd.isna(val):
         return ""
     val_str = str(val).strip()
     if not val_str:
         return ""
+
+    # 全角数字・記号の簡易半角変換
+    val_str = val_str.translate(str.maketrans({
+        '０':'0','１':'1','２':'2','３':'3','４':'4',
+        '５':'5','６':'6','７':'7','８':'8','９':'9',
+        '：':':','／':'/','．':'.'
+    }))
+
+    # 和暦パターン（令和・平成・R・H）の変換処理
+    # 例: "令和6年8月7日 14時30分00秒", "R6.8.7 14:30", "令和元年5月1日"
+    wareki_match = re.search(r'(令和|平成|R|H)\s*([0-9元]+)\s*[\.年/]\s*([0-9]+)\s*[\.月/]\s*([0-9]+)', val_str, re.IGNORECASE)
+    
+    if wareki_match:
+        era = wareki_match.group(1).upper()
+        year_str = wareki_match.group(2)
+        month = int(wareki_match.group(3))
+        day = int(wareki_match.group(4))
+
+        year_num = 1 if year_str == "元" else int(year_str)
+
+        # 元号別の西暦計算
+        if era in ["令和", "R"]:
+            seireki_year = 2018 + year_num
+        elif era in ["平成", "H"]:
+            seireki_year = 1988 + year_num
+        else:
+            seireki_year = year_num
+
+        # 時刻部分の判定（例: "14:30:00", "14時30分" 等）
+        time_match = re.search(r'([0-9]{1,2})\s*[:時]\s*([0-9]{1,2})(?:\s*[:分]\s*([0-9]{1,2}))?', val_str)
+        if time_match:
+            hour = int(time_match.group(1))
+            minute = int(time_match.group(2))
+            second = int(time_match.group(3)) if time_match.group(3) else 0
+        else:
+            hour, minute, second = 0, 0, 0
+
+        try:
+            dt = datetime.datetime(seireki_year, month, day, hour, minute, second)
+            return dt.strftime("%Y/%m/%d %H:%M:%S")
+        except Exception:
+            pass
+
+    # 西暦パターン・標準日付フォーマットの判定
     try:
         dt = pd.to_datetime(val_str)
         if pd.notna(dt):
             return dt.strftime("%Y/%m/%d %H:%M:%S")
     except Exception:
         pass
+
     return val_str
 
 
@@ -286,7 +332,7 @@ def process_and_align_data(raw_data, source_label):
         if col not in df.columns:
             df[col] = ""
 
-    # 日時フォーマットの正規化（yyyy/mm/dd hh:mm:ss）
+    # 日時フォーマットの正規化（和暦 ➜ 西暦 yyyy/mm/dd hh:mm:ss）
     if "現在状況 日時" in df.columns:
         df["現在状況 日時"] = df["現在状況 日時"].apply(format_datetime_str)
 
