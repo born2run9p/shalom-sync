@@ -2,7 +2,9 @@ name: Shalom Daily Sync
 
 on:
   schedule:
-    - cron: '0 18 * * *' # 毎日定期実行などの設定
+    - cron: '0 9 * * *' # 毎日定期実行などの設定
+  repository_dispatch:
+    types: [run-shalom-sync] # HTMLボタン側と文字を合わせる
   workflow_dispatch:
 
 jobs:
