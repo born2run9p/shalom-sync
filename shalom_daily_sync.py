@@ -39,6 +39,55 @@ def get_gspread_client():
     return gspread.authorize(creds)
 
 
+def find_element_in_frames(page, selectors):
+    """メインページおよび全iframe内から指定したセレクターに一致する最初の要素を探す"""
+    for selector in selectors:
+        # メインページチェック
+        loc = page.locator(selector).first
+        if loc.count() > 0 and loc.is_visible():
+            return loc
+        
+        # iframe内チェック
+        for frame in page.frames:
+            f_loc = frame.locator(selector).first
+            if f_loc.count() > 0 and f_loc.is_visible():
+                return f_loc
+    return None
+
+
+def fill_input(page, selectors, value, field_name="要素"):
+    """要素を検索して値を入力する通用関数（timeout付き試行）"""
+    start_time = time.time()
+    while time.time() - start_time < 30:
+        el = find_element_in_frames(page, selectors)
+        if el:
+            try:
+                el.click()
+                el.fill("")
+                el.type(value, delay=50)
+                return True
+            except Exception as e:
+                print(f"   --> {field_name} への入力試行中... ({e})")
+        page.wait_for_timeout(1000)
+    raise TimeoutError(f"{field_name} が画面上に見つかりませんでした。 selectors={selectors}")
+
+
+def click_button(page, selectors, button_name="ボタン"):
+    """要素を検索してクリックする"""
+    start_time = time.time()
+    while time.time() - start_time < 15:
+        el = find_element_in_frames(page, selectors)
+        if el:
+            try:
+                el.click()
+                return True
+            except Exception:
+                pass
+        page.wait_for_timeout(1000)
+    print(f"   --> [{button_name}] のクリック対象が見つからないためスキップします。")
+    return False
+
+
 def get_main_table(target_context):
     """画面内（またはiframe内）で最も行数が多く、目視可能なメインテーブルを特定する"""
     tables = target_context.locator("table")
@@ -66,7 +115,6 @@ def collect_visible_rows_from_main_table(main_table, is_first_fetch=False):
         th_count = row.locator("th").count()
         td_count = row.locator("td").count()
         
-        # 2回目以降のスクロールでヘッダー（thのみ）があればスキップ
         if not is_first_fetch and th_count > 0 and td_count == 0:
             continue
 
@@ -81,27 +129,20 @@ def collect_visible_rows_from_main_table(main_table, is_first_fetch=False):
 
 def handle_popups_and_wait(page, url_name):
     """「はい」押下 ➜ 30秒待機 ➜ 「OK」押下の共通ポップアップ処理"""
-    # 1つ目のポップアップ（「はい」ボタン）
-    try:
-        confirm_btn = page.locator("button:has-text('はい'), input[value='画面を閉じる'], input[value='はい'], a:has-text('はい')").first
-        confirm_btn.wait_for(timeout=5000)
-        confirm_btn.click()
+    popup_selectors = ["button:has-text('はい')", "input[value='画面を閉じる']", "input[value='はい']", "a:has-text('はい')"]
+    if click_button(page, popup_selectors, f"{url_name} - はいボタン"):
         print(f"   --> [{url_name}] ポップアップで『はい』をクリックしました！")
-    except Exception:
+    else:
         print(f"   --> [{url_name}] 1つ目のポップアップ（はいボタン）は表示されませんでした。")
 
-    # 更新処理待機 (30秒)
     print(f"   --> [{url_name}] 画面の更新・データ処理中（30秒間待機）...")
     page.wait_for_timeout(30000)
 
-    # 2つ目のポップアップ（「OK」ボタン）
-    try:
-        ok_btn = page.locator("button:has-text('OK'), input[value='OK'], a:has-text('OK'), button:has-text('確認'), input[value='確認']").first
-        ok_btn.wait_for(state="visible", timeout=10000)
-        ok_btn.click()
+    ok_selectors = ["button:has-text('OK')", "input[value='OK']", "a:has-text('OK')", "button:has-text('確認')", "input[value='確認']"]
+    if click_button(page, ok_selectors, f"{url_name} - OKボタン"):
         print(f"   --> [{url_name}] ポップアップで『OK』をクリックしました！")
         page.wait_for_timeout(3000)
-    except Exception:
+    else:
         print(f"   --> [{url_name}] 『OK』ボタンは見つかりませんでした。次の処理に進みます。")
 
 
@@ -110,7 +151,6 @@ def scrape_table_data(page, url_name):
     print(f"   --> [{url_name}] テーブル内部へ直接スクロール操作を実行中...")
     scraped_data = []
 
-    # コンテキスト（メインページまたは iframe）を特定
     target_context = page
     if page.locator("table").count() == 0:
         for frame in page.frames:
@@ -119,7 +159,6 @@ def scrape_table_data(page, url_name):
                 print(f"   --> [{url_name}] iframe 内のテーブル領域を検出しました。")
                 break
 
-    # 一番行数の多いメインテーブル要素を特定
     main_table = get_main_table(target_context)
 
     if main_table and main_table.count() > 0:
@@ -156,7 +195,6 @@ def scrape_table_data(page, url_name):
 
         last_count = len(scraped_data)
 
-        # メインテーブルのスクロールバーを操作
         target_context.evaluate("""
             () => {
                 const allDivs = document.querySelectorAll('div, section, main, tbody');
@@ -178,74 +216,99 @@ def run():
     print("1. Googleスプレッドシートに接続中...")
     gc = get_gspread_client()
     
-    # スプレッドシート1 (EA1100W用)
     sheet1 = gc.open_by_key(SPREADSHEET_KEY_1).sheet1
-    # スプレッドシート2 (MP0002W用)
     sheet2 = gc.open_by_key(SPREADSHEET_KEY_2).sheet1
 
     print("2. 自動ブラウザを起動して社労夢にアクセス中...")
     with sync_playwright() as p:
-        # Headlessモードで起動 (CI環境用)
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox"]
+        )
+        # ビューポートサイズを固定指定してレスポンシブ崩れを防止
+        context = browser.new_context(viewport={"width": 1280, "height": 800})
+        page = context.new_page()
 
         # --- ① ログイン画面を開く ---
-        page.goto("https://4ever.shalom-house.jp/login")
+        page.goto("https://4ever.shalom-house.jp/login", wait_until="networkidle")
         page.wait_for_timeout(3000)
 
-        # ID入力
+        # ID入力セレクター（優先順に複数指定）
+        id_selectors = [
+            "input[name='userId']",
+            "input[name='id']",
+            "input[name='loginId']",
+            "input[placeholder*='ID']",
+            "input[placeholder*='ユーザー']",
+            "input[type='text']",
+            "input:not([type='password']):not([type='hidden'])"
+        ]
+
         print(f"1. IDを入力中... ({SHALOM_ID})")
-        id_field = page.locator("input[type='text'], input:not([type='password']):not([type='hidden'])").first
-        id_field.click()
-        id_field.press("Control+A")
-        id_field.press("Backspace")
-        id_field.type(SHALOM_ID, delay=50)
+        fill_input(page, id_selectors, SHALOM_ID, "ID入力欄")
         page.wait_for_timeout(1000)
 
         # パスワード入力
+        pass_selectors = [
+            "input[type='password']",
+            "input[name='password']",
+            "input[name='pass']"
+        ]
         print("2. パスワードを入力中...")
-        pass_field = page.locator("input[type='password']").first
-        pass_field.click()
-        pass_field.press("Control+A")
-        pass_field.press("Backspace")
-        pass_field.type(SHALOM_PASS, delay=50)
+        fill_input(page, pass_selectors, SHALOM_PASS, "パスワード入力欄")
         page.wait_for_timeout(1000)
 
         # ログインボタンクリック
         print("3. ログインボタンをクリックします...")
-        page.locator("button[type='submit'], input[type='submit'], button:has-text('ログイン')").first.click()
+        login_btn_selectors = [
+            "button[type='submit']",
+            "input[type='submit']",
+            "button:has-text('ログイン')",
+            "input[value='ログイン']",
+            "a:has-text('ログイン')"
+        ]
+        click_button(page, login_btn_selectors, "ログインボタン")
 
         # --- ② 二要素認証（2FA） ---
         print("4. 二要素認証（2FA）画面の待機中...")
-        page.wait_for_selector("input[type='tel'], input[type='number'], input[name*='otp'], input[name*='code'], input", timeout=15000)
-        page.wait_for_timeout(1000)
+        page.wait_for_timeout(4000)
 
         totp = pyotp.TOTP(TOTP_SECRET)
         code = totp.now()
         print(f"   --> 生成されたワンタイムコード: {code}")
 
-        otp_field = page.locator("input[type='tel'], input[type='number'], input[name*='otp'], input[name*='code']").first
-        otp_field.click()
-        otp_field.fill(code)
-        page.wait_for_timeout(500)
+        otp_selectors = [
+            "input[type='tel']",
+            "input[type='number']",
+            "input[name*='otp']",
+            "input[name*='code']",
+            "input[placeholder*='コード']",
+            "input[placeholder*='認証']"
+        ]
 
-        print("5. 認証ボタンをクリックして送信中...")
-        auth_btn = page.locator("button:has-text('認証'), input[value='認証'], button:has-text('送信'), button[type='submit'], input[type='submit']").first
-        
-        if auth_btn.is_visible():
-            auth_btn.click()
-        else:
-            otp_field.press("Enter")
+        try:
+            fill_input(page, otp_selectors, code, "OTP入力欄")
+            page.wait_for_timeout(500)
+
+            print("5. 認証ボタンをクリックして送信中...")
+            auth_btn_selectors = [
+                "button:has-text('認証')",
+                "input[value='認証']",
+                "button:has-text('送信')",
+                "button[type='submit']",
+                "input[type='submit']"
+            ]
+            click_button(page, auth_btn_selectors, "認証ボタン")
+        except Exception as e:
+            print(f"   --> 2FA画面をスキップまたは失敗: {e}")
 
         # --- ③ 1つ目のページ（EA1100W）の処理 ---
         print("\n6. 1つ目の目的ページ（EA1100W）へ移動中...")
         page.wait_for_timeout(4000)
-        page.goto("https://4ever.shalom-house.jp/EA1100W")
+        page.goto("https://4ever.shalom-house.jp/EA1100W", wait_until="networkidle")
 
-        # ポップアップ＆30秒待機処理 (EA1100W)
         handle_popups_and_wait(page, "EA1100W")
 
-        # EA1100W のデータ取得 ＆ スプレッドシート1へ保存
         ea_data = scrape_table_data(page, "EA1100W")
         
         print("\n7. スプレッドシート1（EA1100W用）を更新中...")
@@ -256,13 +319,11 @@ def run():
 
         # --- ④ 2つ目のページ（MP0002W）の処理 ---
         print("\n8. 2つ目の目的ページ（MP0002W）へ移動中...")
-        page.goto("https://4ever.shalom-house.jp/MP0002W")
+        page.goto("https://4ever.shalom-house.jp/MP0002W", wait_until="networkidle")
         page.wait_for_timeout(4000)
 
-        # ポップアップ＆30秒待機処理 (MP0002W)
         handle_popups_and_wait(page, "MP0002W")
 
-        # MP0002W のデータ取得 ＆ スプレッドシート2へ保存
         mp_data = scrape_table_data(page, "MP0002W")
 
         print("\n9. スプレッドシート2（MP0002W用）を更新中...")
