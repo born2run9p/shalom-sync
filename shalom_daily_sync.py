@@ -3,8 +3,10 @@ import os
 import sys
 import json
 import time
+import datetime
 import pyotp
 import gspread
+import pandas as pd
 from google.oauth2.service_account import Credentials
 from playwright.sync_api import sync_playwright
 
@@ -19,9 +21,22 @@ SHALOM_ID = os.environ.get("SHALOM_ID", "145371-01")
 SHALOM_PASS = os.environ.get("SHALOM_PASS")
 TOTP_SECRET = os.environ.get("TOTP_SECRET")
 
-# Googleスプレッドシート設定
-SPREADSHEET_KEY_1 = os.environ.get("SPREADSHEET_KEY_1", "14IbYjp3hizNBbb_h0wqu5H217U4UrU5-KKh0DX_QVtk")  # EA1100W用
-SPREADSHEET_KEY_2 = os.environ.get("SPREADSHEET_KEY_2", "1TrGFfFzDzaPaxafgUeKHfsmhvqMs98-xSB-sl7LRrBw")  # MP0002W用
+# スプレッドシートID
+SPREADSHEET_KEY_1 = "12drmIzzXsTyx_16TBOzTWxMygNrBuQv_r-8HSnT_V34"
+SPREADSHEET_KEY_2 = "1cb8gOz19iN6IR7hXbPnlifDXMvcN91amOMG_raSQoTs"
+
+# シートGID定義
+GID_EA1100W = 910840628
+GID_MP0002W = 1520113795
+GID_COMBINED = 368650283
+GID_FILTERED = 282241935
+
+# 規定の10項目
+TARGET_COLUMNS = [
+    "番号", "事業所名", "種別", "手続名", "被保険者名",
+    "現在状況", "現在状況 日時", "データ元", "公文書保管完了", "最終更新日時"
+]
+
 GCP_SA_KEY = os.environ.get("GCP_SA_KEY")
 
 
@@ -69,7 +84,6 @@ def fill_input_field(page, selectors, value, field_name="入力欄"):
                 pass
         page.wait_for_timeout(1000)
     
-    # 失敗時のデバッグ情報出力
     print(f"[ERROR] {field_name} が見つかりませんでした。")
     print(f"        現在のURL: {page.url}")
     print(f"        ページタイトル: {page.title()}")
@@ -216,16 +230,63 @@ def scrape_table_data(page, url_name):
     return scraped_data
 
 
+def process_and_align_data(raw_data, source_name):
+    """スクレイピングデータを10項目の標準カラムフォーマットに変換・補正する"""
+    if not raw_data or len(raw_data) < 2:
+        return pd.DataFrame(columns=TARGET_COLUMNS)
+
+    headers = raw_data[0]
+    rows = raw_data[1:]
+
+    # 列数をヘッダーに合わせて正規化
+    header_len = len(headers)
+    normalized_rows = []
+    for r in rows:
+        if len(r) < header_len:
+            r = r + [""] * (header_len - len(r))
+        elif len(r) > header_len:
+            r = r[:header_len]
+        normalized_rows.append(r)
+
+    df = pd.DataFrame(normalized_rows, columns=headers)
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # 必須列を準備（存在しなければ作成）
+    for col in TARGET_COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+
+    df["データ元"] = source_name
+    df["最終更新日時"] = now_str
+
+    # 10項目の順序に整形して返却
+    return df[TARGET_COLUMNS]
+
+
+def update_worksheet_by_gid(doc, gid, raw_matrix):
+    """GIDから指定ワークシートを取得し、データを更新する"""
+    try:
+        ws = doc.get_worksheet_by_id(gid)
+        if not ws:
+            raise ValueError(f"GID: {gid} のシートが見つかりません。")
+        ws.clear()
+        if raw_matrix:
+            ws.update(range_name='A1', values=raw_matrix)
+        return True
+    except Exception as e:
+        print(f"[ERROR] GID: {gid} への更新中にエラーが発生しました: {e}")
+        return False
+
+
 def run():
     print("1. Googleスプレッドシートに接続中...")
     gc = get_gspread_client()
     
-    sheet1 = gc.open_by_key(SPREADSHEET_KEY_1).sheet1
-    sheet2 = gc.open_by_key(SPREADSHEET_KEY_2).sheet1
+    doc1 = gc.open_by_key(SPREADSHEET_KEY_1)
+    doc2 = gc.open_by_key(SPREADSHEET_KEY_2)
 
     print("2. 自動ブラウザを起動して社労夢にアクセス中...")
     with sync_playwright() as p:
-        # アンチボット検知回避オプションを追加して起動
         browser = p.chromium.launch(
             headless=True,
             args=[
@@ -236,7 +297,6 @@ def run():
             ]
         )
         
-        # 実機PCのUser-Agentとビューポートサイズを設定
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             viewport={"width": 1280, "height": 800},
@@ -244,7 +304,6 @@ def run():
         )
         page = context.new_page()
 
-        # webdriver 検出フラグを偽装解除
         page.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => undefined
@@ -257,18 +316,11 @@ def run():
         page.goto(login_url, wait_until="load")
         page.wait_for_timeout(3000)
 
-        print(f"   --> 読み込み完了時URL: {page.url}")
-        print(f"   --> ページタイトル: {page.title()}")
-
         # ID入力
         id_selectors = [
-            "input[name='userId']",
-            "input[name='id']",
-            "input[name='loginId']",
-            "input[placeholder*='ID']",
-            "input[placeholder*='ユーザー']",
-            "input[type='text']",
-            "input:not([type='password']):not([type='hidden'])"
+            "input[name='userId']", "input[name='id']", "input[name='loginId']",
+            "input[placeholder*='ID']", "input[placeholder*='ユーザー']",
+            "input[type='text']", "input:not([type='password']):not([type='hidden'])"
         ]
         print(f"1. IDを入力中... ({SHALOM_ID})")
         fill_input_field(page, id_selectors, SHALOM_ID, "ID入力欄")
@@ -276,9 +328,7 @@ def run():
 
         # パスワード入力
         pass_selectors = [
-            "input[type='password']",
-            "input[name='password']",
-            "input[name='pass']"
+            "input[type='password']", "input[name='password']", "input[name='pass']"
         ]
         print("2. パスワードを入力中...")
         fill_input_field(page, pass_selectors, SHALOM_PASS, "パスワード入力欄")
@@ -287,11 +337,8 @@ def run():
         # ログインボタンクリック
         print("3. ログインボタンをクリックします...")
         login_btn_selectors = [
-            "button[type='submit']",
-            "input[type='submit']",
-            "button:has-text('ログイン')",
-            "input[value='ログイン']",
-            "a:has-text('ログイン')"
+            "button[type='submit']", "input[type='submit']",
+            "button:has-text('ログイン')", "input[value='ログイン']", "a:has-text('ログイン')"
         ]
         click_button_element(page, login_btn_selectors, "ログインボタン")
 
@@ -304,12 +351,9 @@ def run():
         print(f"   --> 生成されたワンタイムコード: {code}")
 
         otp_selectors = [
-            "input[type='tel']",
-            "input[type='number']",
-            "input[name*='otp']",
-            "input[name*='code']",
-            "input[placeholder*='コード']",
-            "input[placeholder*='認証']"
+            "input[type='tel']", "input[type='number']",
+            "input[name*='otp']", "input[name*='code']",
+            "input[placeholder*='コード']", "input[placeholder*='認証']"
         ]
 
         try:
@@ -318,11 +362,8 @@ def run():
 
             print("5. 認証ボタンをクリックして送信中...")
             auth_btn_selectors = [
-                "button:has-text('認証')",
-                "input[value='認証']",
-                "button:has-text('送信')",
-                "button[type='submit']",
-                "input[type='submit']"
+                "button:has-text('認証')", "input[value='認証']",
+                "button:has-text('送信')", "button[type='submit']", "input[type='submit']"
             ]
             click_button_element(page, auth_btn_selectors, "認証ボタン")
         except Exception as e:
@@ -334,14 +375,11 @@ def run():
         page.goto("https://4ever.shalom-house.jp/EA1100W", wait_until="load")
 
         handle_popups_and_wait(page, "EA1100W")
-
         ea_data = scrape_table_data(page, "EA1100W")
-        
-        print("\n7. スプレッドシート1（EA1100W用）を更新中...")
-        sheet1.clear()
-        if ea_data:
-            sheet1.update('A1', ea_data)
-            print(f"★【成功】EA1100W のデータ {len(ea_data)} 行を 1つ目のスプレッドシートに書き込みました！")
+
+        print("\n7. スプレッドシート（EA1100W用 gid: 910840628）を更新中...")
+        if update_worksheet_by_gid(doc1, GID_EA1100W, ea_data):
+            print(f"★【成功】EA1100W のデータ {len(ea_data)} 行を書き込みました！")
 
         # --- ④ 2つ目のページ（MP0002W）の処理 ---
         print("\n8. 2つ目の目的ページ（MP0002W）へ移動中...")
@@ -349,17 +387,42 @@ def run():
         page.wait_for_timeout(4000)
 
         handle_popups_and_wait(page, "MP0002W")
-
         mp_data = scrape_table_data(page, "MP0002W")
 
-        print("\n9. スプレッドシート2（MP0002W用）を更新中...")
-        sheet2.clear()
-        if mp_data:
-            sheet2.update('A1', mp_data)
-            print(f"★【成功】MP0002W のデータ {len(mp_data)} 行を 2つ目のスプレッドシートに書き込みました！")
+        print("\n9. スプレッドシート（MP0002W用 gid: 1520113795）を更新中...")
+        if update_worksheet_by_gid(doc1, GID_MP0002W, mp_data):
+            print(f"★【成功】MP0002W のデータ {len(mp_data)} 行を書き込みました！")
 
-        page.wait_for_timeout(3000)
         browser.close()
+
+    # --- ⑤ データの統合・10項目フォーマット化 ---
+    print("\n10. データの整形および10項目への統合処理中...")
+    df_ea = process_and_align_data(ea_data, "EA1100W")
+    df_mp = process_and_align_data(mp_data, "MP0002W")
+
+    combined_df = pd.concat([df_ea, df_mp], ignore_index=True)
+    combined_matrix = [combined_df.columns.tolist()] + combined_df.fillna("").values.tolist()
+
+    print("11. 統合スプレッドシート（gid: 368650283）を更新中...")
+    if update_worksheet_by_gid(doc1, GID_COMBINED, combined_matrix):
+        print(f"★【成功】統合データ {len(combined_df)} 件を書き込みました！")
+
+    # --- ⑥ フィルタリング処理（除外条件適用） ---
+    print("\n12. 条件（現在状況:『終了』かつ 公文書保管完了:『済』）の除外フィルタリング実行中...")
+    
+    # 判定用に文字列化と空白除去
+    cond_status = combined_df["現在状況"].astype(str).str.contains("終了", na=False)
+    cond_doc = combined_df["公文書保管完了"].astype(str).str.contains("済", na=False)
+
+    # 両方に当てはまるものを除外 (NOT条件)
+    filtered_df = combined_df[~(cond_status & cond_doc)]
+    filtered_matrix = [filtered_df.columns.tolist()] + filtered_df.fillna("").values.tolist()
+
+    print("13. 最終出力用スプレッドシート（別ブック gid: 282241935）を更新中...")
+    if update_worksheet_by_gid(doc2, GID_FILTERED, filtered_matrix):
+        print(f"★【成功】除外後の最終データ {len(filtered_df)} 件を更新しました！")
+
+    print("\nすべての同期・更新プロセスが正常に完了しました。")
 
 
 if __name__ == "__main__":
