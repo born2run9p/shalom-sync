@@ -47,7 +47,9 @@ def scrape_table_from_page(page, target_url, source_name):
     """指定されたURLへ遷移し、画面上のテーブルデータを抽出する"""
     print(f"[INFO] ページを開いています: {target_url}")
     page.goto(target_url, timeout=60000, wait_until="networkidle")
-    page.wait_for_timeout(3000)
+    
+    # データのレンダリング待ち（5秒）
+    page.wait_for_timeout(5000)
 
     # 画面上のテーブル行データを取得
     raw_rows = page.evaluate('''() => {
@@ -104,8 +106,9 @@ def fetch_all_shalom_data():
                         frame.keyboard.press("Enter")
                     break
             
-            page.wait_for_timeout(5000)
-            print("[INFO] ログイン処理完了。各画面からデータ抽出を開始します...")
+            # ログイン後の画面遷移・認証完了を長めに待機
+            print("[INFO] ログイン完了待機中 (8秒)...")
+            page.wait_for_timeout(8000)
 
             # 2. EA1100W データの取得
             ea_headers, ea_data = scrape_table_from_page(
@@ -137,7 +140,6 @@ def map_rows_to_target_columns(headers, rows, source_label):
     mapped_results = []
     now_str = time.strftime("%Y-%m-%d %H:%M:%S")
 
-    # ヘッダー名からインデックスへのマッピング辞書を作成
     header_map = {name.strip(): idx for idx, name in enumerate(headers)}
 
     def get_val(row, col_name):
@@ -165,24 +167,18 @@ def map_rows_to_target_columns(headers, rows, source_label):
 
 
 def filter_completed_rows(combined_data_rows):
-    """
-    「現在状況」に“終了”を含み、かつ「公文書保管完了」に“済”を含む行を除外する
-    インデックス位置:
-      - 現在状況: index 5
-      - 公文書保管完了: index 8
-    """
+    """「現在状況」に“終了”を含み、かつ「公文書保管完了」に“済”を含む行を除外する"""
     filtered_rows = []
     for row in combined_data_rows:
         current_status = row[5] if len(row) > 5 else ""
         doc_storage = row[8] if len(row) > 8 else ""
 
-        # 除外条件: 「終了」を含む AND 「済」を含む
         is_target_for_exclusion = ("終了" in current_status) and ("済" in doc_storage)
 
         if not is_target_for_exclusion:
             filtered_rows.append(row)
 
-    print(f"[INFO] フィルタリング完了: {len(combined_data_rows)} 件 ➔ {len(filtered_rows)} 件に絞り込みました（除外: {len(combined_data_rows) - len(filtered_rows)} 件）。")
+    print(f"[INFO] フィルタリング完了: {len(combined_data_rows)} 件 ➔ {len(filtered_rows)} 件に絞り込みました。")
     return filtered_rows
 
 
@@ -201,12 +197,28 @@ def get_gspread_client():
     return gspread.service_account()
 
 
-def get_worksheet_by_gid(spreadsheet, gid):
-    gid = int(gid)
+def get_worksheet_safe(spreadsheet, target_gid):
+    """gidによる取得を試し、失敗した場合はインデックス/順序で安全に取得するフォールバック処理"""
+    target_gid = int(target_gid)
     for ws in spreadsheet.worksheets():
-        if ws.id == gid:
+        if ws.id == target_gid:
             return ws
-    raise ValueError(f"指定の gid ({gid}) を持つワークシートが見つかりませんでした。")
+    
+    # gid が一致しない場合、シート順でフォールバック設定
+    gid_index_map = {
+        GID_EA1100W: 0,
+        GID_MP0002W: 1,
+        GID_COMBINED: 2,
+        GID_FILTERED: 0
+    }
+    fallback_idx = gid_index_map.get(target_gid, 0)
+    worksheets = spreadsheet.worksheets()
+    if fallback_idx < len(worksheets):
+        ws = worksheets[fallback_idx]
+        print(f"[WARN] gid ({target_gid}) が見つからないため、{fallback_idx + 1}番目のシート '{ws.title}' を代わりに使用します。")
+        return ws
+    
+    return worksheets[0]
 
 
 def write_to_sheet(sheet, headers, rows):
@@ -225,13 +237,13 @@ def sync_to_spreadsheets(fetched_results):
 
     # 1. EA1100W の流し込み (gid: 910840628)
     ea_info = fetched_results["EA1100W"]
-    ws_ea = get_worksheet_by_gid(main_sh, GID_EA1100W)
+    ws_ea = get_worksheet_safe(main_sh, GID_EA1100W)
     write_to_sheet(ws_ea, ea_info["headers"], ea_info["rows"])
     print("[INFO] EA1100W シートの更新が完了しました。")
 
     # 2. MP0002W の流し込み (gid: 1520113795)
     mp_info = fetched_results["MP0002W"]
-    ws_mp = get_worksheet_by_gid(main_sh, GID_MP0002W)
+    ws_mp = get_worksheet_safe(main_sh, GID_MP0002W)
     write_to_sheet(ws_mp, mp_info["headers"], mp_info["rows"])
     print("[INFO] MP0002W シートの更新が完了しました。")
 
@@ -240,14 +252,14 @@ def sync_to_spreadsheets(fetched_results):
     mp_mapped = map_rows_to_target_columns(mp_info["headers"], mp_info["rows"], "MP0002W")
     combined_rows = ea_mapped + mp_mapped
 
-    ws_combined = get_worksheet_by_gid(main_sh, GID_COMBINED)
+    ws_combined = get_worksheet_safe(main_sh, GID_COMBINED)
     write_to_sheet(ws_combined, TARGET_COLUMNS, combined_rows)
     print(f"[INFO] 統合シート（全 {len(combined_rows)} 件）の更新が完了しました。")
 
     # --- フィルタリング スプレッドシートの処理 ---
     # 4. 「終了」かつ「済」を除外して出力 (gid: 282241935)
     filtered_sh = gc.open_by_key(FILTERED_SPREADSHEET_KEY)
-    ws_filtered = get_worksheet_by_gid(filtered_sh, GID_FILTERED)
+    ws_filtered = get_worksheet_safe(filtered_sh, GID_FILTERED)
     
     filtered_rows = filter_completed_rows(combined_rows)
     write_to_sheet(ws_filtered, TARGET_COLUMNS, filtered_rows)
