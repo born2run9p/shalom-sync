@@ -23,6 +23,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pandas pyotp selenium gspread google-auth lxml
+          playwright install chromium
 
       - name: Run sync script
         env:
