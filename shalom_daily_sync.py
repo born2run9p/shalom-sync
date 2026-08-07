@@ -9,6 +9,8 @@ from google.oauth2.service_account import Credentials
 # 1. 環境変数と設定値
 # ==========================================
 SHALOM_LOGIN_URL = os.environ.get("SHALOM_LOGIN_URL") or "https://4ever.shalom-house.jp/login"
+
+# Secretsの各種キー名（SHALOM_ID / SHALOM_COMPANY_ID / SHALOM_PASS / SHALOM_PASSWORD）に対応
 SHALOM_COMPANY_ID = os.environ.get("SHALOM_COMPANY_ID") or os.environ.get("SHALOM_ID")
 SHALOM_USER_ID = os.environ.get("SHALOM_USER_ID") or os.environ.get("SHALOM_ID")
 SHALOM_PASSWORD = os.environ.get("SHALOM_PASSWORD") or os.environ.get("SHALOM_PASS")
@@ -44,21 +46,40 @@ TARGET_COLUMNS = [
 # 2. 社労夢からのデータスクレイピング (Playwright)
 # ==========================================
 def scrape_table_from_page(page, target_url, source_name):
-    """指定されたURLへ遷移し、画面上のテーブルデータを抽出する"""
+    """指定されたURLへ遷移し、画面上のテーブルデータを抽出する（十分な待機時間を確保）"""
     print(f"[INFO] ページを開いています: {target_url}")
+    
+    # ページ遷移とネットワーク完了のロード待機
     page.goto(target_url, timeout=60000, wait_until="networkidle")
     
-    # データのレンダリング待ち（5秒）
-    page.wait_for_timeout(5000)
+    # テーブル要素がレンダリングされるまで最大 30 秒監視して待機
+    print(f"[INFO] {source_name} のテーブル要素読み込みを待機中 (最大30秒)...")
+    try:
+        page.wait_for_selector("table, tbody, tr", timeout=30000)
+    except Exception:
+        print(f"[WARN] {source_name} でタイムアウト時間内に `table` タグが検出されませんでした。レンダリング待機を継続します。")
 
-    # 画面上のテーブル行データを取得
-    raw_rows = page.evaluate('''() => {
-        const rows = Array.from(document.querySelectorAll('table tr'));
-        return rows.map(row => {
-            const cells = Array.from(row.querySelectorAll('th, td'));
-            return cells.map(cell => cell.innerText.trim());
-        }).filter(row => row.length > 0);
-    }''')
+    # JavaScriptやSPA（動的通信）による描画完了のため、追加で 15 秒間しっかり待機
+    print(f"[INFO] データ描画の確定待機中 (15秒)...")
+    page.wait_for_timeout(15000)
+
+    # メインページおよびフレーム内からテーブル行データを全て収集
+    raw_rows = []
+    
+    # 全フレーム（iframe含む）を探索してテーブル要素を取得
+    for frame in page.frames:
+        try:
+            rows = frame.evaluate('''() => {
+                const trElements = Array.from(document.querySelectorAll('table tr'));
+                return trElements.map(row => {
+                    const cells = Array.from(row.querySelectorAll('th, td'));
+                    return cells.map(cell => cell.innerText.trim());
+                }).filter(row => row.length > 0);
+            }''')
+            if rows:
+                raw_rows.extend(rows)
+        except Exception:
+            continue
 
     if not raw_rows:
         print(f"[WARN] {target_url} からテーブルデータが検出されませんでした。")
@@ -76,7 +97,11 @@ def fetch_all_shalom_data():
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-blink-features=AutomationControlled"]
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-blink-features=AutomationControlled"
+            ]
         )
         context = browser.new_context(
             viewport={"width": 1280, "height": 800},
@@ -87,13 +112,15 @@ def fetch_all_shalom_data():
         try:
             # 1. ログイン処理
             print(f"[INFO] ログインページにアクセス: {SHALOM_LOGIN_URL}")
-            page.goto(SHALOM_LOGIN_URL, timeout=60000, wait_until="domcontentloaded")
-            page.wait_for_timeout(3000)
+            page.goto(SHALOM_LOGIN_URL, timeout=60000, wait_until="networkidle")
+            page.wait_for_timeout(5000)
 
             # ログインフォームへの入力
+            form_filled = False
             for frame in page.frames:
                 inputs = frame.locator("input")
                 if inputs.count() >= 2:
+                    print("[INFO] ログイン入力フィールドを検出しました。")
                     if SHALOM_COMPANY_ID:
                         inputs.nth(0).fill(SHALOM_COMPANY_ID)
                     if SHALOM_PASSWORD:
@@ -104,11 +131,15 @@ def fetch_all_shalom_data():
                         submit_btn.click()
                     else:
                         frame.keyboard.press("Enter")
+                    form_filled = True
                     break
-            
-            # ログイン後の画面遷移・認証完了を長めに待機
-            print("[INFO] ログイン完了待機中 (8秒)...")
-            page.wait_for_timeout(8000)
+
+            if not form_filled:
+                print("[WARN] ログインフォームが自動検出できなかったため、デフォルトのキー送信を試みます。")
+
+            # ログイン処理完了・ダッシュボード遷移待機（十分な15秒待機）
+            print("[INFO] ログイン後のセッション確立待機中 (15秒)...")
+            page.wait_for_timeout(15000)
 
             # 2. EA1100W データの取得
             ea_headers, ea_data = scrape_table_from_page(
@@ -173,12 +204,13 @@ def filter_completed_rows(combined_data_rows):
         current_status = row[5] if len(row) > 5 else ""
         doc_storage = row[8] if len(row) > 8 else ""
 
+        # 除外条件: 「終了」を含む AND 「済」を含む
         is_target_for_exclusion = ("終了" in current_status) and ("済" in doc_storage)
 
         if not is_target_for_exclusion:
             filtered_rows.append(row)
 
-    print(f"[INFO] フィルタリング完了: {len(combined_data_rows)} 件 ➔ {len(filtered_rows)} 件に絞り込みました。")
+    print(f"[INFO] フィルタリング完了: {len(combined_data_rows)} 件 ➔ {len(filtered_rows)} 件に絞り込みました（除外: {len(combined_data_rows) - len(filtered_rows)} 件）。")
     return filtered_rows
 
 
@@ -197,28 +229,23 @@ def get_gspread_client():
     return gspread.service_account()
 
 
-def get_worksheet_safe(spreadsheet, target_gid):
-    """gidによる取得を試し、失敗した場合はインデックス/順序で安全に取得するフォールバック処理"""
-    target_gid = int(target_gid)
+def get_worksheet_by_gid(spreadsheet, target_gid):
+    """gidによる判定を確実に行い、正しくワークシートを取得する"""
+    target_gid_str = str(target_gid)
+    
     for ws in spreadsheet.worksheets():
-        if ws.id == target_gid:
+        # gspreadの属性 `id` や内部プロパティから gid を文字列で統一取得
+        sheet_id = str(getattr(ws, 'id', ws._properties.get('sheetId', '')))
+        if sheet_id == target_gid_str:
+            print(f"[INFO] gid ({target_gid}) に一致するシート '{ws.title}' を検出しました。")
             return ws
+
+    # 万が一一致しない場合の警告と一覧出力
+    available_sheets = [(ws.title, getattr(ws, 'id', 'N/A')) for ws in spreadsheet.worksheets()]
+    print(f"[WARN] gid ({target_gid}) が見つかりませんでした。存在するシート一覧: {available_sheets}")
     
-    # gid が一致しない場合、シート順でフォールバック設定
-    gid_index_map = {
-        GID_EA1100W: 0,
-        GID_MP0002W: 1,
-        GID_COMBINED: 2,
-        GID_FILTERED: 0
-    }
-    fallback_idx = gid_index_map.get(target_gid, 0)
-    worksheets = spreadsheet.worksheets()
-    if fallback_idx < len(worksheets):
-        ws = worksheets[fallback_idx]
-        print(f"[WARN] gid ({target_gid}) が見つからないため、{fallback_idx + 1}番目のシート '{ws.title}' を代わりに使用します。")
-        return ws
-    
-    return worksheets[0]
+    # 最初のシートをフォールバックとして返す
+    return spreadsheet.worksheets()[0]
 
 
 def write_to_sheet(sheet, headers, rows):
@@ -237,13 +264,13 @@ def sync_to_spreadsheets(fetched_results):
 
     # 1. EA1100W の流し込み (gid: 910840628)
     ea_info = fetched_results["EA1100W"]
-    ws_ea = get_worksheet_safe(main_sh, GID_EA1100W)
+    ws_ea = get_worksheet_by_gid(main_sh, GID_EA1100W)
     write_to_sheet(ws_ea, ea_info["headers"], ea_info["rows"])
     print("[INFO] EA1100W シートの更新が完了しました。")
 
     # 2. MP0002W の流し込み (gid: 1520113795)
     mp_info = fetched_results["MP0002W"]
-    ws_mp = get_worksheet_safe(main_sh, GID_MP0002W)
+    ws_mp = get_worksheet_by_gid(main_sh, GID_MP0002W)
     write_to_sheet(ws_mp, mp_info["headers"], mp_info["rows"])
     print("[INFO] MP0002W シートの更新が完了しました。")
 
@@ -252,14 +279,14 @@ def sync_to_spreadsheets(fetched_results):
     mp_mapped = map_rows_to_target_columns(mp_info["headers"], mp_info["rows"], "MP0002W")
     combined_rows = ea_mapped + mp_mapped
 
-    ws_combined = get_worksheet_safe(main_sh, GID_COMBINED)
+    ws_combined = get_worksheet_by_gid(main_sh, GID_COMBINED)
     write_to_sheet(ws_combined, TARGET_COLUMNS, combined_rows)
     print(f"[INFO] 統合シート（全 {len(combined_rows)} 件）の更新が完了しました。")
 
     # --- フィルタリング スプレッドシートの処理 ---
     # 4. 「終了」かつ「済」を除外して出力 (gid: 282241935)
     filtered_sh = gc.open_by_key(FILTERED_SPREADSHEET_KEY)
-    ws_filtered = get_worksheet_safe(filtered_sh, GID_FILTERED)
+    ws_filtered = get_worksheet_by_gid(filtered_sh, GID_FILTERED)
     
     filtered_rows = filter_completed_rows(combined_rows)
     write_to_sheet(ws_filtered, TARGET_COLUMNS, filtered_rows)
