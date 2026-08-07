@@ -31,10 +31,16 @@ GID_MP0002W = 1520113795
 GID_COMBINED = 368650283
 GID_FILTERED = 282241935
 
-# 規定の10項目
+# 統合シート用（10項目）
 TARGET_COLUMNS = [
     "番号", "事業所名", "種別", "手続名", "被保険者名",
     "現在状況", "現在状況 日時", "データ元", "公文書保管完了", "最終更新日時"
+]
+
+# ピックアップシート用（9項目）
+PICKUP_COLUMNS = [
+    "データ元", "番号", "事業所名", "種別", "手続名",
+    "被保険者名", "現在状況", "現在状況 日時", "最終更新日時"
 ]
 
 GCP_SA_KEY = os.environ.get("GCP_SA_KEY")
@@ -230,12 +236,28 @@ def scrape_table_data(page, url_name):
     return scraped_data
 
 
+def format_datetime_str(val):
+    """文字列を yyyy/mm/dd hh:mm:ss 形式に変換する補助関数"""
+    if not val or pd.isna(val):
+        return ""
+    val_str = str(val).strip()
+    if not val_str:
+        return ""
+    try:
+        dt = pd.to_datetime(val_str)
+        if pd.notna(dt):
+            return dt.strftime("%Y/%m/%d %H:%M:%S")
+    except Exception:
+        pass
+    return val_str
+
+
 def process_and_align_data(raw_data, source_label):
     """スクレイピングデータを10項目の標準カラムフォーマットに変換・補正する"""
     if not raw_data or len(raw_data) < 2:
         return pd.DataFrame(columns=TARGET_COLUMNS)
 
-    headers = raw_data[0]
+    headers = [str(h).strip() for h in raw_data[0]]
     rows = raw_data[1:]
 
     # 列数をヘッダーに合わせて正規化
@@ -249,12 +271,24 @@ def process_and_align_data(raw_data, source_label):
         normalized_rows.append(r)
 
     df = pd.DataFrame(normalized_rows, columns=headers)
-    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_str = datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+
+    # --- 番号列のマッピング処理 ---
+    if source_label == "電子申請":
+        if "到達番号" in df.columns:
+            df["番号"] = df["到達番号"]
+    elif source_label == "マイナ申請":
+        if "受付番号" in df.columns:
+            df["番号"] = df["受付番号"]
 
     # 必須列を準備（存在しなければ作成）
     for col in TARGET_COLUMNS:
         if col not in df.columns:
             df[col] = ""
+
+    # 日時フォーマットの正規化（yyyy/mm/dd hh:mm:ss）
+    if "現在状況 日時" in df.columns:
+        df["現在状況 日時"] = df["現在状況 日時"].apply(format_datetime_str)
 
     df["データ元"] = source_label
     df["最終更新日時"] = now_str
@@ -397,7 +431,6 @@ def run():
 
     # --- ⑤ データの統合・10項目フォーマット化 ---
     print("\n10. データの整形および10項目への統合処理中...")
-    # データ元ラベルを「電子申請」「マイナ申請」に設定
     df_ea = process_and_align_data(ea_data, "電子申請")
     df_mp = process_and_align_data(mp_data, "マイナ申請")
 
@@ -408,20 +441,22 @@ def run():
     if update_worksheet_by_gid(doc1, GID_COMBINED, combined_matrix):
         print(f"★【成功】統合データ {len(combined_df)} 件を書き込みました！")
 
-    # --- ⑥ フィルタリング処理（除外条件適用） ---
+    # --- ⑥ フィルタリング処理（除外条件適用＆ピックアップ指定9項目へ整列） ---
     print("\n12. 条件（現在状況:『終了』かつ 公文書保管完了:『済』）の除外フィルタリング実行中...")
     
-    # 判定用に文字列化と空白除去
     cond_status = combined_df["現在状況"].astype(str).str.contains("終了", na=False)
     cond_doc = combined_df["公文書保管完了"].astype(str).str.contains("済", na=False)
 
-    # 両方に当てはまるものを除外 (NOT条件)
-    filtered_df = combined_df[~(cond_status & cond_doc)]
-    filtered_matrix = [filtered_df.columns.tolist()] + filtered_df.fillna("").values.tolist()
+    # 両方に当てはまるものを除外
+    filtered_df = combined_df[~(cond_status & cond_doc)].copy()
 
-    print("13. 最終出力用スプレッドシート（別ブック gid: 282241935）を更新中...")
+    # 指定の9項目順（データ元, 番号, 事業所名, 種別, 手続名, 被保険者名, 現在状況, 現在状況 日時, 最終更新日時）へ並べ替え
+    pickup_df = filtered_df[PICKUP_COLUMNS]
+    filtered_matrix = [pickup_df.columns.tolist()] + pickup_df.fillna("").values.tolist()
+
+    print("13. ピックアップ用スプレッドシート（別ブック gid: 282241935）を更新中...")
     if update_worksheet_by_gid(doc2, GID_FILTERED, filtered_matrix):
-        print(f"★【成功】除外後の最終データ {len(filtered_df)} 件を更新しました！")
+        print(f"★【成功】ピックアップデータ {len(pickup_df)} 件を更新しました！")
 
     print("\nすべての同期・更新プロセスが正常に完了しました。")
 
