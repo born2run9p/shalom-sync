@@ -230,7 +230,7 @@ def scrape_table_data(page, url_name):
     return scraped_data
 
 
-def process_and_align_data(raw_data, source_name):
+def process_and_align_data(raw_data, source_label):
     """スクレイピングデータを10項目の標準カラムフォーマットに変換・補正する"""
     if not raw_data or len(raw_data) < 2:
         return pd.DataFrame(columns=TARGET_COLUMNS)
@@ -256,7 +256,7 @@ def process_and_align_data(raw_data, source_name):
         if col not in df.columns:
             df[col] = ""
 
-    df["データ元"] = source_name
+    df["データ元"] = source_label
     df["最終更新日時"] = now_str
 
     # 10項目の順序に整形して返却
@@ -397,8 +397,9 @@ def run():
 
     # --- ⑤ データの統合・10項目フォーマット化 ---
     print("\n10. データの整形および10項目への統合処理中...")
-    df_ea = process_and_align_data(ea_data, "EA1100W")
-    df_mp = process_and_align_data(mp_data, "MP0002W")
+    # データ元ラベルを「電子申請」「マイナ申請」に設定
+    df_ea = process_and_align_data(ea_data, "電子申請")
+    df_mp = process_and_align_data(mp_data, "マイナ申請")
 
     combined_df = pd.concat([df_ea, df_mp], ignore_index=True)
     combined_matrix = [combined_df.columns.tolist()] + combined_df.fillna("").values.tolist()
