@@ -1,354 +1,230 @@
 import os
 import sys
+import json
 import time
-from playwright.sync_api import sync_playwright
+import pyotp
+import pandas as pd
+
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
 import gspread
 from google.oauth2.service_account import Credentials
 
 # ==========================================
 # 1. 環境変数と設定値
 # ==========================================
-SHALOM_LOGIN_URL = os.environ.get("SHALOM_LOGIN_URL") or "https://4ever.shalom-house.jp/login"
+SHALOM_ID = os.environ.get("SHALOM_ID")
+SHALOM_PASS = os.environ.get("SHALOM_PASS")
+TOTP_SECRET = os.environ.get("TOTP_SECRET")
+GCP_SA_KEY = os.environ.get("GCP_SA_KEY")
+TARGET_SPREADSHEET_KEY = os.environ.get("TARGET_SPREADSHEET_KEY")
 
-# Secretsの各種キー名に対応
-SHALOM_COMPANY_ID = os.environ.get("SHALOM_COMPANY_ID") or os.environ.get("SHALOM_ID")
-SHALOM_USER_ID = os.environ.get("SHALOM_USER_ID") or os.environ.get("SHALOM_ID")
-SHALOM_PASSWORD = os.environ.get("SHALOM_PASSWORD") or os.environ.get("SHALOM_PASS")
-
-# 2要素認証コード（必要に応じて設定）
-SHALOM_2FA_CODE = os.environ.get("SHALOM_2FA_CODE") or ""
-
-# スプレッドシートID設定
-MAIN_SPREADSHEET_KEY = os.environ.get("TARGET_SPREADSHEET_KEY") or "12drmIzzXsTyx_16TBOzTWxMygNrBuQv_r-8HSnT_V34"
-FILTERED_SPREADSHEET_KEY = os.environ.get("FILTERED_SPREADSHEET_KEY") or "1cb8gOz19iN6IR7hXbPnlifDXMvcN91amOMG_raSQoTs"
-
-# シートの gid 設定（既存の実際のシート）
-GID_EA1100W = 910840628
-GID_MP0002W = 1520113795
-GID_COMBINED = 368650283
-GID_FILTERED = 282241935
-
-GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON") or os.environ.get("GCP_SA_KEY")
-
-# 統合シートの指定カラム（並び順）
-TARGET_COLUMNS = [
-    "番号",
-    "事業所名",
-    "種別",
-    "手続名",
-    "被保険者名",
-    "現在状況",
-    "現在状況 日時",
-    "データ元",
-    "公文書保管完了",
-    "最終更新日時"
-]
+# エラーログに出ていた gid と フォールバック用のシート名
+TARGET_GID = 910840628
+TARGET_SHEET_NAME = "電子申請"
 
 
-# ==========================================
-# 2. 社労夢からのデータスクレイピング (Playwright)
-# ==========================================
-def handle_login(page):
-    """ログインページのロード待ち、ID/PASS入力、2要素認証待ちを行う"""
-    print(f"[INFO] ログインページにアクセス: {SHALOM_LOGIN_URL}")
-    page.goto(SHALOM_LOGIN_URL, timeout=60000, wait_until="domcontentloaded")
-
-    # 1. ログイン入力フォームが開くまでしっかり待機 (10秒)
-    print("[INFO] ログインページのロードおよびフォーム表示を待機中 (10秒)...")
-    page.wait_for_timeout(10000)
-
-    try:
-        page.wait_for_selector("input", timeout=20000)
-        print("[INFO] ログイン入力フィールドを検出しました。")
-    except Exception:
-        print("[WARN] inputフィールドの明示的検出にタイムアウトしましたが処理を継続します。")
-
-    # 2. ID / パスワードの入力
-    form_filled = False
-    for frame in page.frames:
-        inputs = frame.locator("input[type='text'], input[type='password'], input:not([type='hidden'])")
-        if inputs.count() >= 2:
-            print("[INFO] ID / パスワードを入力中...")
-            if SHALOM_COMPANY_ID:
-                inputs.nth(0).fill(SHALOM_COMPANY_ID)
-            if SHALOM_PASSWORD:
-                inputs.nth(1).fill(SHALOM_PASSWORD)
-            
-            submit_btn = frame.locator("button, input[type='submit'], .btn-login, #loginBtn").first
-            if submit_btn.count() > 0:
-                submit_btn.click()
-            else:
-                frame.keyboard.press("Enter")
-            form_filled = True
-            break
-
-    if not form_filled:
-        print("[WARN] フォームを検出できなかったため、キーボードのEnterキー送信を試みます。")
-        page.keyboard.press("Enter")
-
-    # 3. ログイン押下後の画面遷移および2要素認証の待機 (15秒)
-    print("[INFO] ログイン後の処理・画面遷移を待機中 (15秒)...")
-    page.wait_for_timeout(15000)
-
-    current_url = page.url
-    page_content = page.content()
-    print(f"[INFO] ログイン操作後の現在URL: {current_url}")
-
-    # 2要素認証（OTP / 承認待ち）のチェック
-    if "auth" in current_url.lower() or "two-factor" in current_url.lower() or "認証" in page_content or "ワンタイム" in page_content:
-        print("[WARN] 2要素認証（または追加承認）画面が検出されました。")
-        page.screenshot(path="login_2fa_detected.png")
-
-        if SHALOM_2FA_CODE:
-            print("[INFO] 設定された認証コードを入力します...")
-            otp_input = page.locator("input[type='text'], input[type='number']").first
-            if otp_input.count() > 0:
-                otp_input.fill(SHALOM_2FA_CODE)
-                page.keyboard.press("Enter")
-                page.wait_for_timeout(10000)
-        else:
-            print("[WARN] 2要素認証の突破を試みるため、追加で 15 秒間待機します...")
-            page.wait_for_timeout(15000)
+def get_chrome_driver():
+    """Headless Chrome Driverの設定・立ち上げ"""
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument(
+        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+    return webdriver.Chrome(options=chrome_options)
 
 
-def scrape_table_from_page(page, target_url, source_name):
-    """指定されたURLへ遷移し、画面上のテーブルデータを抽出する"""
-    print(f"[INFO] ページを開いています: {target_url}")
-    
-    page.goto(target_url, timeout=60000, wait_until="networkidle")
-    current_url = page.url
-    
-    # ログイン画面へリダイレクトされた場合の判定
-    if "login" in current_url.lower():
-        print(f"[ERROR] {source_name} へのアクセス時にログイン画面へ戻されました。ログインが完了していません。")
-        page.screenshot(path=f"error_{source_name}_redirect.png")
-        return [], []
-
-    print(f"[INFO] {source_name} のテーブル要素読み込みを待機中 (最大20秒)...")
-    try:
-        page.wait_for_selector("table, tr", timeout=20000)
-    except Exception:
-        print(f"[WARN] {source_name} でタイムアウト内に `table` タグが検出されませんでした。")
-        page.screenshot(path=f"error_{source_name}_notable.png")
-
-    page.wait_for_timeout(5000)
-
-    # テーブルデータの収集
-    raw_rows = []
-    for frame in page.frames:
-        try:
-            rows = frame.evaluate('''() => {
-                const trElements = Array.from(document.querySelectorAll('table tr'));
-                return trElements.map(row => {
-                    const cells = Array.from(row.querySelectorAll('th, td'));
-                    return cells.map(cell => cell.innerText.trim());
-                }).filter(row => row.length > 0);
-            }''')
-            if rows:
-                raw_rows.extend(rows)
-        except Exception:
-            continue
-
-    if not raw_rows:
-        print(f"[WARN] {target_url} からテーブルデータが検出されませんでした。")
-        return [], []
-
-    headers = raw_rows[0]
-    data_rows = raw_rows[1:] if len(raw_rows) > 1 else []
-    print(f"[INFO] {source_name} から {len(data_rows)} 件のデータを取得しました。")
-    return headers, data_rows
-
-
-def fetch_all_shalom_data():
+def login_to_shalom(driver):
+    """社労夢へのログイン処理（TOTP 2要素認証自動突破を含む）"""
+    print("[INFO] ===== 社労夢 デイリー同期処理 開始 =====")
     print("[INFO] 社労夢へのリモートアクセスを開始します...")
     
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-blink-features=AutomationControlled"
-            ]
-        )
-        context = browser.new_context(
-            viewport={"width": 1280, "height": 800},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
-        page = context.new_page()
-
+    login_url = "https://4ever.shalom-house.jp/login"
+    driver.get(login_url)
+    
+    wait = WebDriverWait(driver, 20)
+    
+    print(f"[INFO] ログインページにアクセス: {login_url}")
+    print("[INFO] ログインページのロードおよびフォーム表示を待機中...")
+    
+    # ID / パスワード入力フィールドの取得と入力
+    id_field = wait.until(
+        EC.presence_of_element_located((By.CSS_SELECTOR, "input[name='id'], input[name='userId'], input[type='text']"))
+    )
+    pass_field = driver.find_element(By.CSS_SELECTOR, "input[name='password'], input[type='password']")
+    
+    print("[INFO] ログイン入力フィールドを検出しました。")
+    print("[INFO] ID / パスワードを入力中...")
+    
+    id_field.clear()
+    id_field.send_keys(SHALOM_ID)
+    pass_field.clear()
+    pass_field.send_keys(SHALOM_PASS)
+    
+    # ログインボタン押下
+    submit_btn = driver.find_element(By.XPATH, "//button[@type='submit'] | //input[@type='submit']")
+    submit_btn.click()
+    
+    time.sleep(5)
+    
+    # ------------------------------------------
+    # 2要素認証（TOTP）突破処理
+    # ------------------------------------------
+    print(f"[INFO] ログイン操作後の現在URL: {driver.current_url}")
+    
+    if "login" in driver.current_url or TOTP_SECRET:
+        print("[WARN] 2要素認証（または追加承認）画面を処理します...")
         try:
-            # 1. ログイン処理
-            handle_login(page)
-
-            # 2. EA1100W データの取得
-            ea_headers, ea_data = scrape_table_from_page(
-                page, "https://4ever.shalom-house.jp/EA1100W", "EA1100W"
+            # OTP入力フィールドを検索
+            totp_input = wait.until(
+                EC.presence_of_element_located((
+                    By.CSS_SELECTOR,
+                    "input[name*='totp'], input[name*='code'], input[name*='otp'], input[type='text']"
+                ))
             )
-
-            # 3. MP0002W データの取得
-            mp_headers, mp_data = scrape_table_from_page(
-                page, "https://4ever.shalom-house.jp/MP0002W", "MP0002W"
-            )
-
-            return {
-                "EA1100W": {"headers": ea_headers, "rows": ea_data},
-                "MP0002W": {"headers": mp_headers, "rows": mp_data}
-            }
-
+            
+            if TOTP_SECRET and totp_input:
+                print("[INFO] TOTP_SECRET からワンタイムパスワードを自動生成中...")
+                totp = pyotp.TOTP(TOTP_SECRET)
+                otp_code = totp.now()
+                
+                totp_input.clear()
+                totp_input.send_keys(otp_code)
+                print(f"[INFO] ワンタイムパスワード ({otp_code}) を入力しました。")
+                
+                # 認証・送信ボタン押下
+                auth_btn = driver.find_element(
+                    By.XPATH, "//button[contains(text(),'認証') or contains(text(),'送信') or @type='submit']"
+                )
+                auth_btn.click()
+                print("[INFO] ログイン完了・画面遷移を待機中 (15秒)...")
+                time.sleep(15)
         except Exception as e:
-            print(f"[ERROR] 社労夢データ取得中にエラーが発生しました: {e}")
-            page.screenshot(path="fatal_error.png")
-            raise
-        finally:
-            browser.close()
+            print(f"[WARN] 2要素認証の全自動突破をスキップ/試行失敗: {e}")
 
 
-# ==========================================
-# 3. データ整形・結合・フィルタリング処理
-# ==========================================
-def map_rows_to_target_columns(headers, rows, source_label):
-    """取得したテーブルデータを指定10項目のフォーマットに変換する"""
-    mapped_results = []
-    now_str = time.strftime("%Y-%m-%d %H:%M:%S")
+def fetch_shalom_data(driver):
+    """データ取得ページ（EA1100W, MP0002W）へのアクセスとデータ収集"""
+    wait = WebDriverWait(driver, 20)
+    scraped_df = None
 
-    header_map = {name.strip(): idx for idx, name in enumerate(headers)}
-
-    def get_val(row, col_name):
-        idx = header_map.get(col_name)
-        if idx is not None and idx < len(row):
-            return row[idx]
-        return ""
-
-    for row in rows:
-        formatted_row = [
-            get_val(row, "番号"),
-            get_val(row, "事業所名"),
-            get_val(row, "種別"),
-            get_val(row, "手続名"),
-            get_val(row, "被保険者名"),
-            get_val(row, "現在状況"),
-            get_val(row, "現在状況 日時") or get_val(row, "現在状況日時"),
-            source_label,  # データ元
-            get_val(row, "公文書保管完了"),
-            now_str        # 最終更新日時
-        ]
-        mapped_results.append(formatted_row)
-
-    return mapped_results
-
-
-def filter_completed_rows(combined_data_rows):
-    """「現在状況」に“終了”を含み、かつ「公文書保管完了」に“済”を含む行を除外する"""
-    filtered_rows = []
-    for row in combined_data_rows:
-        current_status = row[5] if len(row) > 5 else ""
-        doc_storage = row[8] if len(row) > 8 else ""
-
-        is_target_for_exclusion = ("終了" in current_status) and ("済" in doc_storage)
-
-        if not is_target_for_exclusion:
-            filtered_rows.append(row)
-
-    print(f"[INFO] フィルタリング完了: {len(combined_data_rows)} 件 ➔ {len(filtered_rows)} 件に絞り込みました（除外: {len(combined_data_rows) - len(filtered_rows)} 件）。")
-    return filtered_rows
-
-
-# ==========================================
-# 4. Google スプレッドシート書き込み処理
-# ==========================================
-def get_gspread_client():
-    if GOOGLE_CREDENTIALS_JSON:
-        import json
-        creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
-        creds = Credentials.from_service_account_info(
-            creds_dict,
-            scopes=["https://www.googleapis.com/auth/spreadsheets"]
-        )
-        return gspread.authorize(creds)
-    return gspread.service_account()
-
-
-def get_worksheet_by_gid(spreadsheet, target_gid):
-    """指定された gid の既存シートを取得する"""
-    target_gid_int = int(target_gid)
+    # EA1100W アクセス
+    url_ea = "https://4ever.shalom-house.jp/EA1100W"
+    print(f"[INFO] ページを開いています: {url_ea}")
+    driver.get(url_ea)
     
     try:
-        # gspread の `get_worksheet_by_id` で直接既存シートを取得
-        ws = spreadsheet.get_worksheet_by_id(target_gid_int)
-        if ws:
-            print(f"[INFO] gid ({target_gid}) に一致するシート '{ws.title}' を正常に取得しました。")
-            return ws
+        print("[INFO] EA1100W のテーブル要素読み込みを待機中 (最大20秒)...")
+        wait.until(EC.presence_of_element_located((By.TAG_NAME, "table")))
+        
+        # HTMLからテーブルデータを読み込み
+        dfs = pd.read_html(driver.page_source)
+        if dfs:
+            scraped_df = dfs[0]
+            print(f"[INFO] EA1100W からデータテーブルを取得しました ({len(scraped_df)} 行)")
+        else:
+            print(f"[WARN] {url_ea} からテーブルデータが検出されませんでした。")
     except Exception as e:
-        print(f"[WARN] get_worksheet_by_id 取得時エラー: {e}")
+        print(f"[WARN] EA1100W でタイムアウトまたはテーブル検出失敗: {e}")
 
-    # フォールバック探索
-    for ws in spreadsheet.worksheets():
-        sheet_id = getattr(ws, 'id', getattr(ws, '_properties', {}).get('sheetId'))
-        if str(sheet_id) == str(target_gid):
-            print(f"[INFO] 検出されたシート: '{ws.title}' (gid: {sheet_id})")
-            return ws
-
-    raise ValueError(f"[ERROR] 指定された gid ({target_gid}) のシートが見つかりませんでした。スプレッドシートの権限（Googleサービスアカウントへの共有）をご確認ください。")
-
-
-def write_to_sheet(sheet, headers, rows):
-    sheet.clear()
-    payload = [headers] + rows if headers else rows
-    if payload:
-        sheet.update('A1', payload)
-
-
-def sync_to_spreadsheets(fetched_results):
-    print("[INFO] スプレッドシートへのデータ同期を開始します...")
-    gc = get_gspread_client()
-
-    # --- メイン スプレッドシートの処理 ---
-    main_sh = gc.open_by_key(MAIN_SPREADSHEET_KEY)
-
-    # 1. EA1100W の流し込み (gid: 910840628)
-    ea_info = fetched_results["EA1100W"]
-    ws_ea = get_worksheet_by_gid(main_sh, GID_EA1100W)
-    write_to_sheet(ws_ea, ea_info["headers"], ea_info["rows"])
-    print("[INFO] EA1100W シートの更新が完了しました。")
-
-    # 2. MP0002W の流し込み (gid: 1520113795)
-    mp_info = fetched_results["MP0002W"]
-    ws_mp = get_worksheet_by_gid(main_sh, GID_MP0002W)
-    write_to_sheet(ws_mp, mp_info["headers"], mp_info["rows"])
-    print("[INFO] MP0002W シートの更新が完了しました。")
-
-    # 3. 指定10項目へフォーマット変換＆データ結合 (gid: 368650283)
-    ea_mapped = map_rows_to_target_columns(ea_info["headers"], ea_info["rows"], "EA1100W")
-    mp_mapped = map_rows_to_target_columns(mp_info["headers"], mp_info["rows"], "MP0002W")
-    combined_rows = ea_mapped + mp_mapped
-
-    ws_combined = get_worksheet_by_gid(main_sh, GID_COMBINED)
-    write_to_sheet(ws_combined, TARGET_COLUMNS, combined_rows)
-    print(f"[INFO] 統合シート（全 {len(combined_rows)} 件）の更新が完了しました。")
-
-    # --- フィルタリング スプレッドシートの処理 (gid: 282241935) ---
-    filtered_sh = gc.open_by_key(FILTERED_SPREADSHEET_KEY)
-    ws_filtered = get_worksheet_by_gid(filtered_sh, GID_FILTERED)
+    # MP0002W アクセス検証
+    url_mp = "https://4ever.shalom-house.jp/MP0002W"
+    print(f"[INFO] ページを開いています: {url_mp}")
+    driver.get(url_mp)
     
-    filtered_rows = filter_completed_rows(combined_rows)
-    write_to_sheet(ws_filtered, TARGET_COLUMNS, filtered_rows)
-    print("[INFO] フィルタリング後のシート更新が完了しました。")
+    if "login" in driver.current_url:
+        print("[ERROR] MP0002W へのアクセス時にログイン画面へ戻されました。ログインが完了していません。")
+        return None
+
+    return scraped_df
 
 
-# ==========================================
-# 5. メイン実行処理
-# ==========================================
-def run():
-    print("[INFO] ===== 社労夢 デイリー同期処理 開始 =====")
+def sync_to_spreadsheet(df):
+    """Google スプレッドシートへのデータ同期（エラーハンドリング・フォールバック付き）"""
+    print("[INFO] スプレッドシートへのデータ同期を開始します...")
+    
+    if not GCP_SA_KEY:
+        raise ValueError("[ERROR] GCP_SA_KEY 環境変数がセットされていません。")
+        
+    scopes = [
+        'https://www.googleapis.com/auth/spreadsheets',
+        'https://www.googleapis.com/auth/drive'
+    ]
+    
+    sa_info = json.loads(GCP_SA_KEY)
+    creds = Credentials.from_service_account_info(sa_info, scopes=scopes)
+    client = gspread.authorize(creds)
+    
+    spreadsheet = client.open_by_key(TARGET_SPREADSHEET_KEY)
+    worksheet = None
+
+    # 1. gid によるシート取得を優先試行
     try:
-        data = fetch_all_shalom_data()
-        sync_to_spreadsheets(data)
-        print("[INFO] ===== 社労夢 デイリー同期処理 正常終了 =====")
+        worksheet = spreadsheet.get_worksheet_by_id(TARGET_GID)
+        print(f"[INFO] gid ({TARGET_GID}) のシートを正常に取得しました。")
+    except Exception as e:
+        print(f"[WARN] get_worksheet_by_id 取得時エラー: id {TARGET_GID} not found")
+        print(f"[INFO] 代替手段としてシート名 '{TARGET_SHEET_NAME}' での取得を試みます...")
+        
+        # 2. シート名によるフォールバック取得
+        try:
+            worksheet = spreadsheet.worksheet(TARGET_SHEET_NAME)
+            print(f"[INFO] シート名 '{TARGET_SHEET_NAME}' でシートを取得しました。")
+        except Exception:
+            print("[WARN] 指定したシート名が見つからないため、1番目のワークシート（sheet1）を使用します。")
+            worksheet = spreadsheet.sheet1
+
+    if not worksheet:
+        raise Exception("[ERROR] 指定されたワークシートが見つからず、同期を中断しました。")
+
+    # データ書き込み処理
+    if df is not None and not df.empty:
+        df_cleaned = df.fillna("")
+        headers = df_cleaned.columns.tolist()
+        values = df_cleaned.values.tolist()
+        
+        worksheet.clear()
+        worksheet.update('A1', [headers] + values)
+        print("[INFO] スプレッドシートへのデータ書き込みが正常に完了しました。")
+    else:
+        print("[WARN] 同期対象のデータが空です。更新をスキップします。")
+
+
+def main():
+    driver = None
+    try:
+        driver = get_chrome_driver()
+        
+        # 1. ログイン
+        login_to_shalom(driver)
+        
+        # 2. データ取得
+        df = fetch_shalom_data(driver)
+        
+        if df is None:
+            print("[FATAL] 処理が異常終了しました: ログイン状態の保持またはデータ取得に失敗しました。")
+            sys.exit(1)
+            
+        # 3. スプレッドシートへ同期
+        sync_to_spreadsheet(df)
+        print("[INFO] すべての処理が成功しました。")
+        
     except Exception as e:
         print(f"[FATAL] 処理が異常終了しました: {e}")
         sys.exit(1)
+    finally:
+        if driver:
+            driver.quit()
 
 
 if __name__ == "__main__":
-    run()
+    main()
