@@ -8,6 +8,7 @@ import pandas as pd
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
@@ -23,7 +24,6 @@ TOTP_SECRET = os.environ.get("TOTP_SECRET")
 GCP_SA_KEY = os.environ.get("GCP_SA_KEY")
 TARGET_SPREADSHEET_KEY = os.environ.get("TARGET_SPREADSHEET_KEY")
 
-# エラーログに出ていた gid と フォールバック用のシート名
 TARGET_GID = 910840628
 TARGET_SHEET_NAME = "電子申請"
 
@@ -31,7 +31,7 @@ TARGET_SHEET_NAME = "電子申請"
 def get_chrome_driver():
     """Headless Chrome Driverの設定・立ち上げ"""
     chrome_options = Options()
-    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
@@ -41,6 +41,24 @@ def get_chrome_driver():
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
     return webdriver.Chrome(options=chrome_options)
+
+
+def click_submit_or_enter(driver, input_element):
+    """ログイン/送信ボタンをクリック、見つからなければEnterキーで送信"""
+    try:
+        # ボタンを広範なセレクタで検索
+        buttons = driver.find_elements(
+            By.CSS_SELECTOR, "button, input[type='submit'], input[type='button'], a.btn, div.btn"
+        )
+        for btn in buttons:
+            if btn.is_displayed():
+                btn.click()
+                return
+    except Exception:
+        pass
+    
+    # ボタンクリックに失敗した場合はEnterキーを押下
+    input_element.send_keys(Keys.RETURN)
 
 
 def login_to_shalom(driver):
@@ -70,9 +88,9 @@ def login_to_shalom(driver):
     pass_field.clear()
     pass_field.send_keys(SHALOM_PASS)
     
-    # ログインボタン押下
-    submit_btn = driver.find_element(By.XPATH, "//button[@type='submit'] | //input[@type='submit']")
-    submit_btn.click()
+    # 送信実行（ボタンクリックまたはEnterキー）
+    print("[INFO] ログインフォームを送信します...")
+    click_submit_or_enter(driver, pass_field)
     
     time.sleep(5)
     
@@ -88,7 +106,7 @@ def login_to_shalom(driver):
             totp_input = wait.until(
                 EC.presence_of_element_located((
                     By.CSS_SELECTOR,
-                    "input[name*='totp'], input[name*='code'], input[name*='otp'], input[type='text']"
+                    "input[name*='totp'], input[name*='code'], input[name*='otp'], input[type='text'], input[type='number']"
                 ))
             )
             
@@ -101,11 +119,8 @@ def login_to_shalom(driver):
                 totp_input.send_keys(otp_code)
                 print(f"[INFO] ワンタイムパスワード ({otp_code}) を入力しました。")
                 
-                # 認証・送信ボタン押下
-                auth_btn = driver.find_element(
-                    By.XPATH, "//button[contains(text(),'認証') or contains(text(),'送信') or @type='submit']"
-                )
-                auth_btn.click()
+                # 送信実行
+                click_submit_or_enter(driver, totp_input)
                 print("[INFO] ログイン完了・画面遷移を待機中 (15秒)...")
                 time.sleep(15)
         except Exception as e:
@@ -149,7 +164,7 @@ def fetch_shalom_data(driver):
 
 
 def sync_to_spreadsheet(df):
-    """Google スプレッドシートへのデータ同期（エラーハンドリング・フォールバック付き）"""
+    """Google スプレッドシートへのデータ同期"""
     print("[INFO] スプレッドシートへのデータ同期を開始します...")
     
     if not GCP_SA_KEY:
@@ -167,7 +182,7 @@ def sync_to_spreadsheet(df):
     spreadsheet = client.open_by_key(TARGET_SPREADSHEET_KEY)
     worksheet = None
 
-    # 1. gid によるシート取得を優先試行
+    # 1. gid によるシート取得
     try:
         worksheet = spreadsheet.get_worksheet_by_id(TARGET_GID)
         print(f"[INFO] gid ({TARGET_GID}) のシートを正常に取得しました。")
@@ -216,7 +231,7 @@ def main():
             
         # 3. スプレッドシートへ同期
         sync_to_spreadsheet(df)
-        print("[INFO] すべての処理が成功しました。")
+        print("[INFO] すべての処理が正常に完了しました。")
         
     except Exception as e:
         print(f"[FATAL] 処理が異常終了しました: {e}")
