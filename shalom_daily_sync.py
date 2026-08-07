@@ -39,47 +39,51 @@ def get_gspread_client():
     return gspread.authorize(creds)
 
 
-def find_element_in_frames(page, selectors):
-    """メインページおよび全iframe内から指定したセレクターに一致する最初の要素を探す"""
+def find_locator_in_page_or_frames(page, selectors):
+    """メインページおよびすべてのiframe内から対象ロケータを探索"""
     for selector in selectors:
-        # メインページチェック
         loc = page.locator(selector).first
-        if loc.count() > 0 and loc.is_visible():
+        if loc.count() > 0:
             return loc
         
-        # iframe内チェック
         for frame in page.frames:
             f_loc = frame.locator(selector).first
-            if f_loc.count() > 0 and f_loc.is_visible():
+            if f_loc.count() > 0:
                 return f_loc
     return None
 
 
-def fill_input(page, selectors, value, field_name="要素"):
-    """要素を検索して値を入力する通用関数（timeout付き試行）"""
+def fill_input_field(page, selectors, value, field_name="入力欄"):
+    """要素が存在するまで待機して値を入力"""
     start_time = time.time()
     while time.time() - start_time < 30:
-        el = find_element_in_frames(page, selectors)
-        if el:
+        loc = find_locator_in_page_or_frames(page, selectors)
+        if loc:
             try:
-                el.click()
-                el.fill("")
-                el.type(value, delay=50)
+                loc.wait_for(state="attached", timeout=3000)
+                loc.click()
+                loc.fill("")
+                loc.type(value, delay=50)
                 return True
-            except Exception as e:
-                print(f"   --> {field_name} への入力試行中... ({e})")
+            except Exception:
+                pass
         page.wait_for_timeout(1000)
-    raise TimeoutError(f"{field_name} が画面上に見つかりませんでした。 selectors={selectors}")
+    
+    # 失敗時のデバッグ情報出力
+    print(f"[ERROR] {field_name} が見つかりませんでした。")
+    print(f"        現在のURL: {page.url}")
+    print(f"        ページタイトル: {page.title()}")
+    raise TimeoutError(f"{field_name} の取得に失敗しました。")
 
 
-def click_button(page, selectors, button_name="ボタン"):
-    """要素を検索してクリックする"""
+def click_button_element(page, selectors, button_name="ボタン"):
+    """ボタン要素を検索してクリック"""
     start_time = time.time()
     while time.time() - start_time < 15:
-        el = find_element_in_frames(page, selectors)
-        if el:
+        loc = find_locator_in_page_or_frames(page, selectors)
+        if loc:
             try:
-                el.click()
+                loc.click()
                 return True
             except Exception:
                 pass
@@ -130,7 +134,7 @@ def collect_visible_rows_from_main_table(main_table, is_first_fetch=False):
 def handle_popups_and_wait(page, url_name):
     """「はい」押下 ➜ 30秒待機 ➜ 「OK」押下の共通ポップアップ処理"""
     popup_selectors = ["button:has-text('はい')", "input[value='画面を閉じる']", "input[value='はい']", "a:has-text('はい')"]
-    if click_button(page, popup_selectors, f"{url_name} - はいボタン"):
+    if click_button_element(page, popup_selectors, f"{url_name} - はいボタン"):
         print(f"   --> [{url_name}] ポップアップで『はい』をクリックしました！")
     else:
         print(f"   --> [{url_name}] 1つ目のポップアップ（はいボタン）は表示されませんでした。")
@@ -139,7 +143,7 @@ def handle_popups_and_wait(page, url_name):
     page.wait_for_timeout(30000)
 
     ok_selectors = ["button:has-text('OK')", "input[value='OK']", "a:has-text('OK')", "button:has-text('確認')", "input[value='確認']"]
-    if click_button(page, ok_selectors, f"{url_name} - OKボタン"):
+    if click_button_element(page, ok_selectors, f"{url_name} - OKボタン"):
         print(f"   --> [{url_name}] ポップアップで『OK』をクリックしました！")
         page.wait_for_timeout(3000)
     else:
@@ -221,19 +225,42 @@ def run():
 
     print("2. 自動ブラウザを起動して社労夢にアクセス中...")
     with sync_playwright() as p:
+        # アンチボット検知回避オプションを追加して起動
         browser = p.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox"]
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-infobars"
+            ]
         )
-        # ビューポートサイズを固定指定してレスポンシブ崩れを防止
-        context = browser.new_context(viewport={"width": 1280, "height": 800})
+        
+        # 実機PCのUser-Agentとビューポートサイズを設定
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 800},
+            ignore_https_errors=True
+        )
         page = context.new_page()
 
+        # webdriver 検出フラグを偽装解除
+        page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+        """)
+
         # --- ① ログイン画面を開く ---
-        page.goto("https://4ever.shalom-house.jp/login", wait_until="networkidle")
+        login_url = "https://4ever.shalom-house.jp/login"
+        print(f"URLにアクセス中: {login_url}")
+        page.goto(login_url, wait_until="load")
         page.wait_for_timeout(3000)
 
-        # ID入力セレクター（優先順に複数指定）
+        print(f"   --> 読み込み完了時URL: {page.url}")
+        print(f"   --> ページタイトル: {page.title()}")
+
+        # ID入力
         id_selectors = [
             "input[name='userId']",
             "input[name='id']",
@@ -243,9 +270,8 @@ def run():
             "input[type='text']",
             "input:not([type='password']):not([type='hidden'])"
         ]
-
         print(f"1. IDを入力中... ({SHALOM_ID})")
-        fill_input(page, id_selectors, SHALOM_ID, "ID入力欄")
+        fill_input_field(page, id_selectors, SHALOM_ID, "ID入力欄")
         page.wait_for_timeout(1000)
 
         # パスワード入力
@@ -255,7 +281,7 @@ def run():
             "input[name='pass']"
         ]
         print("2. パスワードを入力中...")
-        fill_input(page, pass_selectors, SHALOM_PASS, "パスワード入力欄")
+        fill_input_field(page, pass_selectors, SHALOM_PASS, "パスワード入力欄")
         page.wait_for_timeout(1000)
 
         # ログインボタンクリック
@@ -267,7 +293,7 @@ def run():
             "input[value='ログイン']",
             "a:has-text('ログイン')"
         ]
-        click_button(page, login_btn_selectors, "ログインボタン")
+        click_button_element(page, login_btn_selectors, "ログインボタン")
 
         # --- ② 二要素認証（2FA） ---
         print("4. 二要素認証（2FA）画面の待機中...")
@@ -287,7 +313,7 @@ def run():
         ]
 
         try:
-            fill_input(page, otp_selectors, code, "OTP入力欄")
+            fill_input_field(page, otp_selectors, code, "OTP入力欄")
             page.wait_for_timeout(500)
 
             print("5. 認証ボタンをクリックして送信中...")
@@ -298,14 +324,14 @@ def run():
                 "button[type='submit']",
                 "input[type='submit']"
             ]
-            click_button(page, auth_btn_selectors, "認証ボタン")
+            click_button_element(page, auth_btn_selectors, "認証ボタン")
         except Exception as e:
-            print(f"   --> 2FA画面をスキップまたは失敗: {e}")
+            print(f"   --> 2FA画面をスキップまたは処理成功: {e}")
 
         # --- ③ 1つ目のページ（EA1100W）の処理 ---
         print("\n6. 1つ目の目的ページ（EA1100W）へ移動中...")
         page.wait_for_timeout(4000)
-        page.goto("https://4ever.shalom-house.jp/EA1100W", wait_until="networkidle")
+        page.goto("https://4ever.shalom-house.jp/EA1100W", wait_until="load")
 
         handle_popups_and_wait(page, "EA1100W")
 
@@ -319,7 +345,7 @@ def run():
 
         # --- ④ 2つ目のページ（MP0002W）の処理 ---
         print("\n8. 2つ目の目的ページ（MP0002W）へ移動中...")
-        page.goto("https://4ever.shalom-house.jp/MP0002W", wait_until="networkidle")
+        page.goto("https://4ever.shalom-house.jp/MP0002W", wait_until="load")
         page.wait_for_timeout(4000)
 
         handle_popups_and_wait(page, "MP0002W")
