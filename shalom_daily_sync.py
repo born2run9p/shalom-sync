@@ -61,17 +61,21 @@ def get_gspread_client():
     return gspread.authorize(creds)
 
 
-def clean_text_value(val):
-    """パーセント表記（100%, (100%)等）を削除し、前後・末尾の不要な空白（半角・全角）を取り除く関数"""
+def clean_cell_text(val):
+    """セル値の前後の不要な空白（半角・全角・改行・タブ）を安全に除去する"""
+    if not val or pd.isna(val):
+        return ""
+    return str(val).strip(' \t\n\r\u3000')
+
+
+def clean_status_value(val):
+    """「現在状況」欄から (100%) や 100% などのパーセント表記を取り除く"""
     if not val or pd.isna(val):
         return ""
     val_str = str(val)
     # (100%) や 100% などのパーセント数字表記を削除
-    val_str = re.sub(r'\s*[\(（]?[0-9０-９]+\s*[%％][\)）]?', '', val_str)
-    # 残った % や ％ 記号を削除
-    val_str = re.sub(r'[%％]', '', val_str)
-    # 半角・全角スペース、改行、タブを末尾・先頭から除去
-    return val_str.strip(' \t\n\r\u3000')
+    cleaned = re.sub(r'[\(（]?\s*[0-9０-９]+\s*[%％]\s*[\)）]?', '', val_str)
+    return clean_cell_text(cleaned)
 
 
 def find_locator_in_page_or_frames(page, selectors):
@@ -157,7 +161,7 @@ def collect_visible_rows_from_main_table(main_table, is_first_fetch=False):
             continue
 
         cells = row.locator("th, td").all_text_contents()
-        clean_cells = [c.strip(' \t\n\r\u3000') for c in cells]
+        clean_cells = [c.strip() for c in cells]
 
         if any(clean_cells):
             extracted_rows.append(clean_cells)
@@ -254,9 +258,7 @@ def format_datetime_str(val):
     """和暦（令和/平成/R/H）を含む文字列を yyyy/mm/dd hh:mm:ss 形式に変換する関数"""
     if not val or pd.isna(val):
         return ""
-    
-    # パーセント表記や不要な空白を削除してから判定に入る
-    val_str = clean_text_value(val)
+    val_str = str(val).strip()
     if not val_str:
         return ""
 
@@ -313,11 +315,12 @@ def format_datetime_str(val):
 
 
 def process_and_align_data(raw_data, source_label):
-    """スクレイピングデータを10項目の標準カラムフォーマットに変換・補正・クレンジングする"""
+    """スクレイピングデータを10項目の標準カラムフォーマットに変換・補正する"""
     if not raw_data or len(raw_data) < 2:
         return pd.DataFrame(columns=TARGET_COLUMNS)
 
-    headers = [clean_text_value(h) for h in raw_data[0]]
+    # ヘッダーは元の安全な形で取得
+    headers = [str(h).strip() for h in raw_data[0]]
     rows = raw_data[1:]
 
     # 列数をヘッダーに合わせて正規化
@@ -346,25 +349,23 @@ def process_and_align_data(raw_data, source_label):
         if col not in df.columns:
             df[col] = ""
 
-    # 全カラムに対して末尾・先頭の余分な空白（半角・全角）を削除
-    for col in df.columns:
-        df[col] = df[col].astype(str).apply(lambda x: x.strip(' \t\n\r\u3000'))
+    # 「現在状況」欄からパーセント（100%等）を除去
+    if "現在状況" in df.columns:
+        df["現在状況"] = df["現在状況"].apply(clean_status_value)
 
-    # 「現在状況」が含まれる列（「現在状況」「現在状況 日時」等）からパーセント表記を除去
-    for col in df.columns:
-        if "現在状況" in col:
-            df[col] = df[col].apply(clean_text_value)
-
-    # 「日時」が含まれる列（最終更新日時以外）を yyyy/mm/dd hh:mm:ss に標準化
-    for col in df.columns:
-        if "日時" in col and col != "最終更新日時":
-            df[col] = df[col].apply(format_datetime_str)
+    # 日時フォーマットの正規化（和暦 ➜ 西暦 yyyy/mm/dd hh:mm:ss）
+    if "現在状況 日時" in df.columns:
+        df["現在状況 日時"] = df["現在状況 日時"].apply(format_datetime_str)
 
     df["データ元"] = source_label
     df["最終更新日時"] = now_str
 
-    # 10項目の順序に整形して返却
-    return df[TARGET_COLUMNS]
+    # 10項目に絞り込んだ後、全セルの前後空白（半角・全角）をクレンジング
+    res_df = df[TARGET_COLUMNS].copy()
+    for col in res_df.columns:
+        res_df[col] = res_df[col].apply(clean_cell_text)
+
+    return res_df
 
 
 def update_worksheet_by_gid(doc, gid, raw_matrix):
@@ -506,9 +507,9 @@ def run():
 
     combined_df = pd.concat([df_ea, df_mp], ignore_index=True)
 
-    # 統合データ全体の各セルから末尾・先頭の余分なスペースを除去
+    # 統合データ全体のセルを再確認トリム
     for col in combined_df.columns:
-        combined_df[col] = combined_df[col].astype(str).apply(lambda x: x.strip(' \t\n\r\u3000'))
+        combined_df[col] = combined_df[col].apply(clean_cell_text)
 
     combined_matrix = [combined_df.columns.tolist()] + combined_df.fillna("").values.tolist()
 
@@ -525,12 +526,11 @@ def run():
     # 両方に当てはまるものを除外
     filtered_df = combined_df[~(cond_status & cond_doc)].copy()
 
-    # 指定の9項目順（データ元, 番号, 事業所名, 種別, 手続名, 被保険者名, 現在状況, 現在状況 日時, 最終更新日時）へ並べ替え
+    # 指定の9項目順へ並べ替え
     pickup_df = filtered_df[PICKUP_COLUMNS].copy()
 
-    # ピックアップデータ全体の各セルからも末尾・先頭の余分なスペースを除去
     for col in pickup_df.columns:
-        pickup_df[col] = pickup_df[col].astype(str).apply(lambda x: x.strip(' \t\n\r\u3000'))
+        pickup_df[col] = pickup_df[col].apply(clean_cell_text)
 
     filtered_matrix = [pickup_df.columns.tolist()] + pickup_df.fillna("").values.tolist()
 
