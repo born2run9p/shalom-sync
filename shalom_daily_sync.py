@@ -69,7 +69,7 @@ def clean_cell_text(val):
 
 
 def clean_status_value(val):
-    """「現在状況」欄から (100%) や 100% などのパーセント表記を取り除く"""
+    """(100%) や 100% などのパーセント表記を取り除く"""
     if not val or pd.isna(val):
         return ""
     val_str = str(val)
@@ -353,9 +353,9 @@ def process_and_align_data(raw_data, source_label):
     if "現在状況" in df.columns:
         df["現在状況"] = df["現在状況"].apply(clean_status_value)
 
-    # 日時フォーマットの正規化（和暦 ➜ 西暦 yyyy/mm/dd hh:mm:ss）
+    # 「現在状況 日時」欄からパーセントを除去してから日付フォーマットを正規化
     if "現在状況 日時" in df.columns:
-        df["現在状況 日時"] = df["現在状況 日時"].apply(format_datetime_str)
+        df["現在状況 日時"] = df["現在状況 日時"].apply(clean_status_value).apply(format_datetime_str)
 
     df["データ元"] = source_label
     df["最終更新日時"] = now_str
