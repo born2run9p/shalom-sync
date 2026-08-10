@@ -478,6 +478,19 @@ def run():
         print("\n6. 1つ目の目的ページ（EA1100W）へ移動中...")
         page.wait_for_timeout(4000)
         page.goto("https://4ever.shalom-house.jp/EA1100W", wait_until="load")
+        page.wait_for_timeout(3000)
+
+        # 【追加】「クリア(R)」ボタンを押下して少し待つ処理
+        print("   --> [EA1100W] 『クリア(R)』ボタンをクリック中...")
+        clear_btn_selectors = [
+            "#input33",
+            "button:has-text('クリア(R)')",
+            "button:has-text('クリア')",
+            "button[value='クリア(R)']"
+        ]
+        if click_button_element(page, clear_btn_selectors, "クリア(R)ボタン"):
+            print("   --> 『クリア(R)』ボタンをクリックしました。読み込み待機中（3秒）...")
+            page.wait_for_timeout(3000)
 
         handle_popups_and_wait(page, "EA1100W")
         ea_data = scrape_table_data(page, "EA1100W")
