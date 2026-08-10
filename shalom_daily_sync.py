@@ -551,28 +551,23 @@ def run():
     for col in pickup_df.columns:
         pickup_df[col] = pickup_df[col].apply(clean_cell_text)
 
-    # 【追加】B列（番号）にハイパーリンク関数を割り当てる処理
-    def generate_number_hyperlink(row):
-        source = str(row["データ元"])
-        num = str(row["番号"])
-
-        if not num:
-            return ""
-
+    # 【修正】A列（データ元）にハイパーリンク関数を割り当てる処理
+    def generate_source_hyperlink(source_val):
+        source = str(source_val)
         if source == "電子申請":
-            return f'=HYPERLINK("{URL_EA1100W}", "{num}")'
+            return f'=HYPERLINK("{URL_EA1100W}", "{source}")'
         elif source == "マイナ申請":
-            return f'=HYPERLINK("{URL_MP0002W}", "{num}")'
-        return num
+            return f'=HYPERLINK("{URL_MP0002W}", "{source}")'
+        return source
 
-    if "番号" in pickup_df.columns and "データ元" in pickup_df.columns:
-        pickup_df["番号"] = pickup_df.apply(generate_number_hyperlink, axis=1)
+    if "データ元" in pickup_df.columns:
+        pickup_df["データ元"] = pickup_df["データ元"].apply(generate_source_hyperlink)
 
     filtered_matrix = [pickup_df.columns.tolist()] + pickup_df.fillna("").values.tolist()
 
     print("13. ピックアップ用スプレッドシート（別ブック gid: 282241935）を更新中...")
     if update_worksheet_by_gid(doc2, GID_FILTERED, filtered_matrix):
-        print(f"★【成功】ピックアップデータ {len(pickup_df)} 件を更新し、B列にハイパーリンクを設定しました！")
+        print(f"★【成功】ピックアップデータ {len(pickup_df)} 件を更新し、A列にハイパーリンクを設定しました！")
 
     print("\nすべての同期・更新プロセスが正常に完了しました。")
 
