@@ -32,6 +32,10 @@ GID_MP0002W = 1520113795
 GID_COMBINED = 368650283
 GID_FILTERED = 282241935
 
+# URL定義
+URL_EA1100W = "https://4ever.shalom-house.jp/EA1100W"
+URL_MP0002W = "https://4ever.shalom-house.jp/MP0002W"
+
 # 統合シート用（10項目）
 TARGET_COLUMNS = [
     "番号", "事業所名", "種別", "手続名", "被保険者名",
@@ -39,6 +43,7 @@ TARGET_COLUMNS = [
 ]
 
 # ピックアップシート用（9項目）
+# A列:データ元, B列:番号, C列:事業所名 ...
 PICKUP_COLUMNS = [
     "データ元", "番号", "事業所名", "種別", "手続名",
     "被保険者名", "現在状況", "現在状況 日時", "最終更新日時"
@@ -376,7 +381,8 @@ def update_worksheet_by_gid(doc, gid, raw_matrix):
             raise ValueError(f"GID: {gid} のシートが見つかりません。")
         ws.clear()
         if raw_matrix:
-            ws.update(range_name='A1', values=raw_matrix)
+            # HYPERLINK関数などの数式を解析・適用させるため USER_ENTERED を指定
+            ws.update(range_name='A1', values=raw_matrix, value_input_option='USER_ENTERED')
         return True
     except Exception as e:
         print(f"[ERROR] GID: {gid} への更新中にエラーが発生しました: {e}")
@@ -477,10 +483,10 @@ def run():
         # --- ③ 1つ目のページ（EA1100W）の処理 ---
         print("\n6. 1つ目の目的ページ（EA1100W）へ移動中...")
         page.wait_for_timeout(4000)
-        page.goto("https://4ever.shalom-house.jp/EA1100W", wait_until="load")
+        page.goto(URL_EA1100W, wait_until="load")
         page.wait_for_timeout(3000)
 
-        # 【追加】「クリア(R)」ボタンを押下して少し待つ処理
+        # 「クリア(R)」ボタンを押下して少し待つ処理
         print("   --> [EA1100W] 『クリア(R)』ボタンをクリック中...")
         clear_btn_selectors = [
             "#input33",
@@ -501,7 +507,7 @@ def run():
 
         # --- ④ 2つ目のページ（MP0002W）の処理 ---
         print("\n8. 2つ目の目的ページ（MP0002W）へ移動中...")
-        page.goto("https://4ever.shalom-house.jp/MP0002W", wait_until="load")
+        page.goto(URL_MP0002W, wait_until="load")
         page.wait_for_timeout(4000)
 
         handle_popups_and_wait(page, "MP0002W")
@@ -539,17 +545,34 @@ def run():
     # 両方に当てはまるものを除外
     filtered_df = combined_df[~(cond_status & cond_doc)].copy()
 
-    # 指定の9項目順へ並べ替え
+    # 指定の9項目順へ並べ替え（A列:データ元, B列:番号, ...）
     pickup_df = filtered_df[PICKUP_COLUMNS].copy()
 
     for col in pickup_df.columns:
         pickup_df[col] = pickup_df[col].apply(clean_cell_text)
 
+    # 【追加】B列（番号）にハイパーリンク関数を割り当てる処理
+    def generate_number_hyperlink(row):
+        source = str(row["データ元"])
+        num = str(row["番号"])
+
+        if not num:
+            return ""
+
+        if source == "電子申請":
+            return f'=HYPERLINK("{URL_EA1100W}", "{num}")'
+        elif source == "マイナ申請":
+            return f'=HYPERLINK("{URL_MP0002W}", "{num}")'
+        return num
+
+    if "番号" in pickup_df.columns and "データ元" in pickup_df.columns:
+        pickup_df["番号"] = pickup_df.apply(generate_number_hyperlink, axis=1)
+
     filtered_matrix = [pickup_df.columns.tolist()] + pickup_df.fillna("").values.tolist()
 
     print("13. ピックアップ用スプレッドシート（別ブック gid: 282241935）を更新中...")
     if update_worksheet_by_gid(doc2, GID_FILTERED, filtered_matrix):
-        print(f"★【成功】ピックアップデータ {len(pickup_df)} 件を更新しました！")
+        print(f"★【成功】ピックアップデータ {len(pickup_df)} 件を更新し、B列にハイパーリンクを設定しました！")
 
     print("\nすべての同期・更新プロセスが正常に完了しました。")
 
