@@ -2,9 +2,11 @@ name: Shalom Daily Sync
 
 on:
   schedule:
-    # 日本時間（JST）の 09:00, 12:00, 15:00 に自動実行
-    # (UTC時間: 00:00, 03:00, 06:00)
-    - cron: '0 0,3,6 * * *'
+    # 日本時間（JST） 08:47 / 12:11 / 14:49 / 17:24 に実行
+    - cron: '47 23 * * *' # JST 08:47 (UTC 前日23:47)
+    - cron: '11 3 * * *'  # JST 12:11 (UTC 03:11)
+    - cron: '49 5 * * *'  # JST 14:49 (UTC 05:49)
+    - cron: '24 8 * * *'  # JST 17:24 (UTC 08:24)
   repository_dispatch:
     types: [run-shalom-sync] # HTMLボタン側と文字を合わせる
   workflow_dispatch:
