@@ -53,7 +53,11 @@ def fill_input_field(page, selectors, value, name="入力欄"):
             except Exception:
                 pass
         page.wait_for_timeout(1000)
-    raise TimeoutError(f"{name}の取得に失敗しました。")
+    
+    print(f"[ERROR] {name} が見つかりませんでした。")
+    print(f"        現在のURL: {page.url}")
+    print(f"        ページタイトル: {page.title()}")
+    raise TimeoutError(f"{name} の取得に失敗しました。")
 
 def click_button_element(page, selectors, name="ボタン"):
     start = time.time()
@@ -66,6 +70,7 @@ def click_button_element(page, selectors, name="ボタン"):
             except Exception:
                 pass
         page.wait_for_timeout(1000)
+    print(f"   --> [{name}] のクリック対象が見つからないためスキップします。")
     return False
 
 def run():
@@ -75,51 +80,101 @@ def run():
 
     print("2. ブラウザ起動＆ログイン開始...")
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(viewport={"width": 1280, "height": 800})
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-infobars"
+            ]
+        )
+        
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 800},
+            ignore_https_errors=True
+        )
         page = context.new_page()
 
-        # ログイン処理
-        page.goto("https://4ever.shalom-house.jp/login", wait_until="load")
-        page.wait_for_timeout(3000)
+        # 自動化フラグの隠蔽
+        page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+        """)
 
-        fill_input_field(page, ["input[name='userId']", "input[type='text']"], SHALOM_ID, "ID")
+        # ログイン処理
+        login_url = "https://4ever.shalom-house.jp/login"
+        print(f"URLにアクセス中: {login_url}")
+        page.goto(login_url, wait_until="load")
+        page.wait_for_timeout(4000)
+
+        id_selectors = [
+            "input[name='userId']", "input[name='id']", "input[name='loginId']",
+            "input[placeholder*='ID']", "input[placeholder*='ユーザー']",
+            "input[type='text']", "input:not([type='password']):not([type='hidden'])"
+        ]
+        print(f"1. IDを入力中... ({SHALOM_ID})")
+        fill_input_field(page, id_selectors, SHALOM_ID, "ID入力欄")
         page.wait_for_timeout(1000)
-        fill_input_field(page, ["input[type='password']"], SHALOM_PASS, "パスワード")
+
+        pass_selectors = [
+            "input[type='password']", "input[name='password']", "input[name='pass']"
+        ]
+        print("2. パスワードを入力中...")
+        fill_input_field(page, pass_selectors, SHALOM_PASS, "パスワード入力欄")
         page.wait_for_timeout(1000)
-        click_button_element(page, ["button[type='submit']", "button:has-text('ログイン')"], "ログイン")
+
+        login_btn_selectors = [
+            "button[type='submit']", "input[type='submit']",
+            "button:has-text('ログイン')", "input[value='ログイン']", "a:has-text('ログイン')"
+        ]
+        print("3. ログインボタンをクリックします...")
+        click_button_element(page, login_btn_selectors, "ログインボタン")
 
         # 2FA
+        print("4. 二要素認証（2FA）処理...")
         page.wait_for_timeout(4000)
         totp = pyotp.TOTP(TOTP_SECRET)
+        code = totp.now()
+
+        otp_selectors = [
+            "input[type='tel']", "input[type='number']",
+            "input[name*='otp']", "input[name*='code']",
+            "input[placeholder*='コード']", "input[placeholder*='認証']"
+        ]
+
         try:
-            fill_input_field(page, ["input[type='tel']", "input[type='number']"], totp.now(), "2FA")
+            fill_input_field(page, otp_selectors, code, "OTP入力欄")
             page.wait_for_timeout(500)
-            click_button_element(page, ["button:has-text('認証')", "button[type='submit']"], "認証")
-        except Exception:
-            pass
+            auth_btn_selectors = [
+                "button:has-text('認証')", "input[value='認証']",
+                "button:has-text('送信')", "button[type='submit']", "input[type='submit']"
+            ]
+            click_button_element(page, auth_btn_selectors, "認証ボタン")
+        except Exception as e:
+            print(f"   --> 2FA処理スキップまたは完了: {e}")
 
         # 目的ページへ遷移
-        print("3. DT0005W ページへ移動中...")
+        print("\n5. DT0005W ページへ移動中...")
         page.wait_for_timeout(4000)
         page.goto("https://4ever.shalom-house.jp/DT0005W", wait_until="load")
-        page.wait_for_timeout(3000)
+        page.wait_for_timeout(4000)
 
         # プルダウン選択（被保険者基本情報 & 全従業員）
-        print("4. プルダウン項目の選択中...")
+        print("6. プルダウン項目の選択中...")
         page.locator("#input1").select_option(label="被保険者基本情報")
-        page.wait_for_timeout(1000)
+        page.wait_for_timeout(1500)
         page.locator("#input3").select_option(label="全従業員")
-        page.wait_for_timeout(1000)
+        page.wait_for_timeout(1500)
 
         # CSVダウンロード実行
-        print("5. 出力実行およびCSVダウンロード待機...")
+        print("7. 出力実行およびCSVダウンロード待機...")
         with page.expect_download(timeout=60000) as download_info:
-            # 出力ボタンクリック
             click_button_element(page, ["button:has-text('出力')", "#input1_span ~ button"], "出力ボタン")
             page.wait_for_timeout(1500)
             
-            # ポップアップ「はい(Y)」クリック
             popup_selectors = ["button:has-text('はい')", "button:has-text('はい(Y)')", "input[value*='はい']"]
             click_button_element(page, popup_selectors, "はいボタン")
 
@@ -130,18 +185,17 @@ def run():
         browser.close()
 
     # CSV読み込み & A~G列の抽出
-    print("6. CSVデータの整形処理中...")
+    print("8. CSVデータの整形処理中...")
     try:
         df = pd.read_csv(csv_path, encoding='cp932')
     except Exception:
         df = pd.read_csv(csv_path, encoding='utf-8')
 
-    # A~G列（先頭7列）のみ取得
     df_sub = df.iloc[:, :7]
     matrix = [df_sub.columns.tolist()] + df_sub.fillna("").values.tolist()
 
     # スプレッドシート更新
-    print("7. スプレッドシート更新中...")
+    print("9. スプレッドシート更新中...")
     ws = doc.get_worksheet_by_id(TARGET_GID)
     ws.clear()
     ws.update(range_name='A1', values=matrix, value_input_option='USER_ENTERED')
