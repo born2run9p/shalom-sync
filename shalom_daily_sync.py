@@ -150,6 +150,50 @@ def set_checkbox_checked(page, selectors, checkbox_name="チェックボック�
     return False
 
 
+def trigger_shortcut(page, key_char):
+    """
+    Alt + キーの送信処理。
+    フォーカスを確実に当ててから送信し、accesskey要素の直接クリックもフォールバック実行。
+    """
+    key_char_lower = key_char.lower()
+    key_char_upper = key_char.upper()
+
+    # 1. ページ全体、および存在するすべてのiframeのbodyにフォーカスを当てる
+    try:
+        page.locator("body").click(position={"x": 10, "y": 10}, force=True)
+    except Exception:
+        pass
+
+    for frame in page.frames:
+        try:
+            frame.locator("body").click(position={"x": 10, "y": 10}, force=True)
+        except Exception:
+            pass
+
+    page.wait_for_timeout(500)
+
+    # 2. キーボードイベントを送信 (小文字と大文字の両方)
+    page.keyboard.press(f"Alt+{key_char_lower}")
+    page.wait_for_timeout(500)
+    page.keyboard.press(f"Alt+{key_char_upper}")
+    page.wait_for_timeout(500)
+
+    # 3. 万が一ショートカットキーイベントが拾われない場合のバックアップ（accesskey属性の直接実行）
+    for frame in [page] + page.frames:
+        try:
+            frame.evaluate(f"""
+                (char) => {{
+                    const el = document.querySelector(`[accesskey="${{char}}"]`) || document.querySelector(`[accesskey="${{char.toUpperCase()}}"]`);
+                    if (el) {{
+                        el.focus();
+                        el.click();
+                    }}
+                }}
+            """, key_char_lower)
+        except Exception:
+            pass
+
+
 def get_main_table(target_context):
     """画面内（またはiframe内）で最も行数が多く、目視可能なメインテーブルを特定する"""
     tables = target_context.locator("table")
@@ -488,9 +532,9 @@ def run():
         page.goto(URL_EA1100W, wait_until="networkidle")
         page.wait_for_timeout(4000)
 
-        # 1. 「クリア(R)」をショートカット（Alt + R）で実行
+        # 1. 「クリア(R)」をショートカット（Alt + R）で実行（フォーカス指定付き）
         print("   --> [EA1100W] ショートカットキー (Alt + R) を送信して『クリア』を実行中...")
-        page.keyboard.press("Alt+r")
+        trigger_shortcut(page, "r")
         page.wait_for_timeout(3000)
 
         # 2. 2つのチェックボックス（#input23, #input24）をオンにする
@@ -504,9 +548,9 @@ def run():
             print("   --> チェックボックス(input24) をオンに設定しました。")
         page.wait_for_timeout(1000)
 
-        # 3. 「検索(F)」をショートカット（Alt + F）で実行
+        # 3. 「検索(F)」をショートカット（Alt + F）で実行（フォーカス指定付き）
         print("   --> [EA1100W] ショートカットキー (Alt + F) を送信して『検索』を実行中...")
-        page.keyboard.press("Alt+f")
+        trigger_shortcut(page, "f")
         page.wait_for_timeout(3000)
 
         # 4. ポップアップで「OK」をクリックする
