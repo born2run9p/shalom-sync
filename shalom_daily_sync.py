@@ -43,7 +43,6 @@ TARGET_COLUMNS = [
 ]
 
 # ピックアップシート用（9項目）
-# A列:データ元, B列:番号, C列:事業所名 ...
 PICKUP_COLUMNS = [
     "データ元", "番号", "事業所名", "種別", "手続名",
     "被保険者名", "現在状況", "現在状況 日時", "最終更新日時"
@@ -78,7 +77,6 @@ def clean_status_value(val):
     if not val or pd.isna(val):
         return ""
     val_str = str(val)
-    # (100%) や 100% などのパーセント数字表記を削除
     cleaned = re.sub(r'[\(（]?\s*[0-9０-９]+\s*[%％]\s*[\)）]?', '', val_str)
     return clean_cell_text(cleaned)
 
@@ -284,14 +282,12 @@ def format_datetime_str(val):
     if not val_str:
         return ""
 
-    # 全角数字・記号の簡易半角変換
     val_str = val_str.translate(str.maketrans({
         '０':'0','１':'1','２':'2','３':'3','４':'4',
         '５':'5','６':'6','７':'7','８':'8','９':'9',
         '：':':','／':'/','．':'.'
     }))
 
-    # 和暦パターン（令和・平成・R・H）の変換処理
     wareki_match = re.search(r'(令和|平成|R|H)\s*([0-9元]+)\s*[\.年/]\s*([0-9]+)\s*[\.月/]\s*([0-9]+)', val_str, re.IGNORECASE)
     
     if wareki_match:
@@ -302,7 +298,6 @@ def format_datetime_str(val):
 
         year_num = 1 if year_str == "元" else int(year_str)
 
-        # 元号別の西暦計算
         if era in ["令和", "R"]:
             seireki_year = 2018 + year_num
         elif era in ["平成", "H"]:
@@ -310,7 +305,6 @@ def format_datetime_str(val):
         else:
             seireki_year = year_num
 
-        # 時刻部分の判定（例: "14:30:00", "14時30分" 等）
         time_match = re.search(r'([0-9]{1,2})\s*[:時]\s*([0-9]{1,2})(?:\s*[:分]\s*([0-9]{1,2}))?', val_str)
         if time_match:
             hour = int(time_match.group(1))
@@ -325,7 +319,6 @@ def format_datetime_str(val):
         except Exception:
             pass
 
-    # 西暦パターン・標準日付フォーマットの判定
     try:
         dt = pd.to_datetime(val_str)
         if pd.notna(dt):
@@ -341,11 +334,9 @@ def process_and_align_data(raw_data, source_label):
     if not raw_data or len(raw_data) < 2:
         return pd.DataFrame(columns=TARGET_COLUMNS)
 
-    # ヘッダーは元の安全な形で取得
     headers = [str(h).strip() for h in raw_data[0]]
     rows = raw_data[1:]
 
-    # 列数をヘッダーに合わせて正規化
     header_len = len(headers)
     normalized_rows = []
     for r in rows:
@@ -358,7 +349,6 @@ def process_and_align_data(raw_data, source_label):
     df = pd.DataFrame(normalized_rows, columns=headers)
     now_str = datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
 
-    # --- 番号列のマッピング処理 ---
     if source_label == "電子申請":
         if "到達番号" in df.columns:
             df["番号"] = df["到達番号"]
@@ -366,23 +356,19 @@ def process_and_align_data(raw_data, source_label):
         if "受付番号" in df.columns:
             df["番号"] = df["受付番号"]
 
-    # 必須列を準備（存在しなければ作成）
     for col in TARGET_COLUMNS:
         if col not in df.columns:
             df[col] = ""
 
-    # 「現在状況」欄からパーセント（100%等）を除去
     if "現在状況" in df.columns:
         df["現在状況"] = df["現在状況"].apply(clean_status_value)
 
-    # 「現在状況 日時」欄からパーセントを除去してから日付フォーマットを正規化
     if "現在状況 日時" in df.columns:
         df["現在状況 日時"] = df["現在状況 日時"].apply(clean_status_value).apply(format_datetime_str)
 
     df["データ元"] = source_label
     df["最終更新日時"] = now_str
 
-    # 10項目に絞り込んだ後、全セルの前後空白（半角・全角）をクレンジング
     res_df = df[TARGET_COLUMNS].copy()
     for col in res_df.columns:
         res_df[col] = res_df[col].apply(clean_cell_text)
@@ -398,7 +384,6 @@ def update_worksheet_by_gid(doc, gid, raw_matrix):
             raise ValueError(f"GID: {gid} のシートが見つかりません。")
         ws.clear()
         if raw_matrix:
-            # HYPERLINK関数などの数式を解析・適用させるため USER_ENTERED を指定
             ws.update(range_name='A1', values=raw_matrix, value_input_option='USER_ENTERED')
         return True
     except Exception as e:
@@ -500,20 +485,13 @@ def run():
         # --- ③ 1つ目のページ（EA1100W）の処理 ---
         print("\n6. 1つ目の目的ページ（EA1100W）へ移動中...")
         page.wait_for_timeout(4000)
-        page.goto(URL_EA1100W, wait_until="load")
-        page.wait_for_timeout(3000)
+        page.goto(URL_EA1100W, wait_until="networkidle")
+        page.wait_for_timeout(4000)
 
-        # 1. 「クリア(R)」ボタンを押下
-        print("   --> [EA1100W] 『クリア(R)』ボタンをクリック中...")
-        clear_btn_selectors = [
-            "#input33",
-            "button:has-text('クリア(R)')",
-            "button[value='クリア(R)']",
-            "button:has-text('クリア')"
-        ]
-        if click_button_element(page, clear_btn_selectors, "クリア(R)ボタン"):
-            print("   --> 『クリア(R)』ボタンをクリックしました。読み込み待機中（3秒）...")
-            page.wait_for_timeout(3000)
+        # 1. 「クリア(R)」をショートカット（Alt + R）で実行
+        print("   --> [EA1100W] ショートカットキー (Alt + R) を送信して『クリア』を実行中...")
+        page.keyboard.press("Alt+r")
+        page.wait_for_timeout(3000)
 
         # 2. 2つのチェックボックス（#input23, #input24）をオンにする
         print("   --> [EA1100W] 指定のチェックボックスをオンに設定中...")
@@ -526,17 +504,10 @@ def run():
             print("   --> チェックボックス(input24) をオンに設定しました。")
         page.wait_for_timeout(1000)
 
-        # 3. 「検索(F)」ボタンを押下
-        print("   --> [EA1100W] 『検索(F)』ボタンをクリック中...")
-        search_btn_selectors = [
-            "#input34",
-            "button:has-text('検索(F)')",
-            "button[value='検索(F)']",
-            "button:has-text('検索')"
-        ]
-        if click_button_element(page, search_btn_selectors, "検索(F)ボタン"):
-            print("   --> 『検索(F)』ボタンをクリックしました。検索処理・ダイアログ待機中（3秒）...")
-            page.wait_for_timeout(3000)
+        # 3. 「検索(F)」をショートカット（Alt + F）で実行
+        print("   --> [EA1100W] ショートカットキー (Alt + F) を送信して『検索』を実行中...")
+        page.keyboard.press("Alt+f")
+        page.wait_for_timeout(3000)
 
         # 4. ポップアップで「OK」をクリックする
         print("   --> [EA1100W] ポップアップ確認（OKボタン待ち）...")
@@ -575,7 +546,6 @@ def run():
 
     combined_df = pd.concat([df_ea, df_mp], ignore_index=True)
 
-    # 統合データ全体のセルを再確認トリム
     for col in combined_df.columns:
         combined_df[col] = combined_df[col].apply(clean_cell_text)
 
@@ -585,22 +555,19 @@ def run():
     if update_worksheet_by_gid(doc1, GID_COMBINED, combined_matrix):
         print(f"★【成功】統合データ {len(combined_df)} 件を書き込みました！")
 
-    # --- ⑥ フィルタリング処理（除外条件適用＆ピックアップ指定9項目へ整列） ---
+    # --- ⑥ フィルタリング処理 ---
     print("\n12. 条件（現在状況:『終了』かつ 公文書保管完了:『済』）の除外フィルタリング実行中...")
     
     cond_status = combined_df["現在状況"].astype(str).str.contains("終了", na=False)
     cond_doc = combined_df["公文書保管完了"].astype(str).str.contains("済", na=False)
 
-    # 両方に当てはまるものを除外
     filtered_df = combined_df[~(cond_status & cond_doc)].copy()
 
-    # 指定の9項目順へ並べ替え（A列:データ元, B列:番号, ...）
     pickup_df = filtered_df[PICKUP_COLUMNS].copy()
 
     for col in pickup_df.columns:
         pickup_df[col] = pickup_df[col].apply(clean_cell_text)
 
-    # A列（データ元）にハイパーリンク関数を割り当てる処理
     def generate_source_hyperlink(source_val):
         source = str(source_val)
         if source == "電子申請":
