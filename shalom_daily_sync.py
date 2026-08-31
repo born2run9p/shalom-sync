@@ -135,6 +135,23 @@ def click_button_element(page, selectors, button_name="ボタン"):
     return False
 
 
+def set_checkbox_checked(page, selectors, checkbox_name="チェックボックス"):
+    """チェックボックス要素を検索してオン（チェック状態）にする"""
+    start_time = time.time()
+    while time.time() - start_time < 15:
+        loc = find_locator_in_page_or_frames(page, selectors)
+        if loc:
+            try:
+                if not loc.is_checked():
+                    loc.check()
+                return True
+            except Exception:
+                pass
+        page.wait_for_timeout(1000)
+    print(f"   --> [{checkbox_name}] が見つからないためチェック設定をスキップします。")
+    return False
+
+
 def get_main_table(target_context):
     """画面内（またはiframe内）で最も行数が多く、目視可能なメインテーブルを特定する"""
     tables = target_context.locator("table")
@@ -486,19 +503,51 @@ def run():
         page.goto(URL_EA1100W, wait_until="load")
         page.wait_for_timeout(3000)
 
-        # 「クリア(R)」ボタンを押下して少し待つ処理
+        # 1. 「クリア(R)」ボタンを押下
         print("   --> [EA1100W] 『クリア(R)』ボタンをクリック中...")
         clear_btn_selectors = [
             "#input33",
             "button:has-text('クリア(R)')",
-            "button:has-text('クリア')",
-            "button[value='クリア(R)']"
+            "button[value='クリア(R)']",
+            "button:has-text('クリア')"
         ]
         if click_button_element(page, clear_btn_selectors, "クリア(R)ボタン"):
             print("   --> 『クリア(R)』ボタンをクリックしました。読み込み待機中（3秒）...")
             page.wait_for_timeout(3000)
 
-        handle_popups_and_wait(page, "EA1100W")
+        # 2. 2つのチェックボックス（#input23, #input24）をオンにする
+        print("   --> [EA1100W] 指定のチェックボックスをオンに設定中...")
+        chk1_selectors = ["#input23", "input[type='checkbox']#input23"]
+        chk2_selectors = ["#input24", "input[type='checkbox']#input24"]
+
+        if set_checkbox_checked(page, chk1_selectors, "チェックボックス1(input23)"):
+            print("   --> チェックボックス(input23) をオンに設定しました。")
+        if set_checkbox_checked(page, chk2_selectors, "チェックボックス2(input24)"):
+            print("   --> チェックボックス(input24) をオンに設定しました。")
+        page.wait_for_timeout(1000)
+
+        # 3. 「検索(F)」ボタンを押下
+        print("   --> [EA1100W] 『検索(F)』ボタンをクリック中...")
+        search_btn_selectors = [
+            "#input34",
+            "button:has-text('検索(F)')",
+            "button[value='検索(F)']",
+            "button:has-text('検索')"
+        ]
+        if click_button_element(page, search_btn_selectors, "検索(F)ボタン"):
+            print("   --> 『検索(F)』ボタンをクリックしました。検索処理・ダイアログ待機中（3秒）...")
+            page.wait_for_timeout(3000)
+
+        # 4. ポップアップで「OK」をクリックする
+        print("   --> [EA1100W] ポップアップ確認（OKボタン待ち）...")
+        ok_selectors = ["button:has-text('OK')", "input[value='OK']", "a:has-text('OK')", "button:has-text('確認')", "input[value='確認']"]
+        if click_button_element(page, ok_selectors, "EA1100W - 検索後OKボタン"):
+            print("   --> ポップアップで『OK』をクリックしました！")
+            page.wait_for_timeout(3000)
+        else:
+            print("   --> 『OK』ポップアップは検出されませんでした。そのまま進みます。")
+
+        # 5. 表のデータを取得
         ea_data = scrape_table_data(page, "EA1100W")
 
         print("\n7. スプレッドシート（EA1100W用 gid: 910840628）を更新中...")
@@ -551,7 +600,7 @@ def run():
     for col in pickup_df.columns:
         pickup_df[col] = pickup_df[col].apply(clean_cell_text)
 
-    # 【修正】A列（データ元）にハイパーリンク関数を割り当てる処理
+    # A列（データ元）にハイパーリンク関数を割り当てる処理
     def generate_source_hyperlink(source_val):
         source = str(source_val)
         if source == "電子申請":
