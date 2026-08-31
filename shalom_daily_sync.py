@@ -150,47 +150,6 @@ def set_checkbox_checked(page, selectors, checkbox_name="チェックボック�
     return False
 
 
-def trigger_shortcut(page, key_char):
-    """
-    Alt + キーの送信処理。
-    フォーカスを確実に当ててから送信し、accesskey要素の直接クリックもフォールバック実行。
-    """
-    key_char_lower = key_char.lower()
-    key_char_upper = key_char.upper()
-
-    try:
-        page.locator("body").click(position={"x": 10, "y": 10}, force=True)
-    except Exception:
-        pass
-
-    for frame in page.frames:
-        try:
-            frame.locator("body").click(position={"x": 10, "y": 10}, force=True)
-        except Exception:
-            pass
-
-    page.wait_for_timeout(500)
-
-    page.keyboard.press(f"Alt+{key_char_lower}")
-    page.wait_for_timeout(500)
-    page.keyboard.press(f"Alt+{key_char_upper}")
-    page.wait_for_timeout(500)
-
-    for frame in [page] + page.frames:
-        try:
-            frame.evaluate(f"""
-                (char) => {{
-                    const el = document.querySelector(`[accesskey="${{char}}"]`) || document.querySelector(`[accesskey="${{char.toUpperCase()}}"]`);
-                    if (el) {{
-                        el.focus();
-                        el.click();
-                    }}
-                }}
-            """, key_char_lower)
-        except Exception:
-            pass
-
-
 def get_main_table(target_context):
     """画面内（またはiframe内）で最も行数が多く、目視可能なメインテーブルを特定する"""
     tables = target_context.locator("table")
@@ -525,13 +484,24 @@ def run():
 
         # --- ③ 1つ目のページ（EA1100W）の処理 ---
         print("\n6. 1つ目の目的ページ（EA1100W）へ移動中...")
-        page.wait_for_timeout(4000)
+        page.wait_for_timeout(5000)
         page.goto(URL_EA1100W, wait_until="networkidle")
-        page.wait_for_timeout(4000)
+        print("   --> ページの完全ロード完了を待機中 (6秒間)")
+        page.wait_for_timeout(6000)
 
-        # 1. 「クリア(R)」をショートカット（Alt + R）で実行
-        print("   --> [EA1100W] ショートカットキー (Alt + R) を送信して『クリア』を実行中...")
-        trigger_shortcut(page, "r")
+        # 1. 「クリア(R)」ボタンを直接クリック
+        print("   --> [EA1100W] 『クリア(R)』ボタンをクリック中...")
+        clear_btn_selectors = [
+            "#input33",
+            "button:has-text('クリア')",
+            "button[value*='クリア']"
+        ]
+        if click_button_element(page, clear_btn_selectors, "クリアボタン"):
+            print("   --> 『クリア』ボタンをクリックしました。")
+        else:
+            print("   --> 『クリア』ボタンが見つかりませんでした。")
+        
+        # クリア処理後の描画待ち
         page.wait_for_timeout(3000)
 
         # 2. 2つのチェックボックス（#input23, #input24）をオンにする
@@ -543,12 +513,25 @@ def run():
             print("   --> チェックボックス(input23) をオンに設定しました。")
         if set_checkbox_checked(page, chk2_selectors, "チェックボックス2(input24)"):
             print("   --> チェックボックス(input24) をオンに設定しました。")
-        page.wait_for_timeout(1000)
+        
+        # チェックボックス設定後の待機
+        page.wait_for_timeout(2000)
 
-        # 3. 「検索(F)」をショートカット（Alt + F）で実行
-        print("   --> [EA1100W] ショートカットキー (Alt + F) を送信して『検索』を実行中...")
-        trigger_shortcut(page, "f")
-        page.wait_for_timeout(3000)
+        # 3. 「検索(F)」ボタンを直接クリック
+        print("   --> [EA1100W] 『検索(F)』ボタンをクリック中...")
+        search_btn_selectors = [
+            "#input34",
+            "button:has-text('検索')",
+            "button[value*='検索']"
+        ]
+        if click_button_element(page, search_btn_selectors, "検索ボタン"):
+            print("   --> 『検索』ボタンをクリックしました。")
+        else:
+            print("   --> 『検索』ボタンが見つかりませんでした。")
+
+        # 検索処理・通信完了の待機
+        print("   --> 検索結果の読み込みを待機中 (5秒間)...")
+        page.wait_for_timeout(5000)
 
         # 4. ポップアップで「OK」をクリックする
         print("   --> [EA1100W] ポップアップ確認（OKボタン待ち）...")
@@ -569,7 +552,7 @@ def run():
         # --- ④ 2つ目のページ（MP0002W）の処理 ---
         print("\n8. 2つ目の目的ページ（MP0002W）へ移動中...")
         page.goto(URL_MP0002W, wait_until="load")
-        page.wait_for_timeout(4000)
+        page.wait_for_timeout(5000)
 
         handle_popups_and_wait(page, "MP0002W")
         mp_data = scrape_table_data(page, "MP0002W")
