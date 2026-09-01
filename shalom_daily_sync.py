@@ -84,14 +84,20 @@ def clean_status_value(val):
 def find_locator_in_page_or_frames(page, selectors):
     """メインページおよびすべてのiframe内から対象ロケータを探索"""
     for selector in selectors:
-        loc = page.locator(selector).first
-        if loc.count() > 0:
-            return loc
+        try:
+            loc = page.locator(selector).first
+            if loc.count() > 0 and loc.is_visible():
+                return loc
+        except Exception:
+            pass
         
         for frame in page.frames:
-            f_loc = frame.locator(selector).first
-            if f_loc.count() > 0:
-                return f_loc
+            try:
+                f_loc = frame.locator(selector).first
+                if f_loc.count() > 0 and f_loc.is_visible():
+                    return f_loc
+            except Exception:
+                pass
     return None
 
 
@@ -102,8 +108,8 @@ def fill_input_field(page, selectors, value, field_name="入力欄"):
         loc = find_locator_in_page_or_frames(page, selectors)
         if loc:
             try:
-                loc.wait_for(state="attached", timeout=3000)
-                loc.click()
+                loc.wait_for(state="visible", timeout=3000)
+                loc.click(force=True)
                 loc.fill("")
                 loc.type(value, delay=50)
                 return True
@@ -112,42 +118,65 @@ def fill_input_field(page, selectors, value, field_name="入力欄"):
         page.wait_for_timeout(1000)
     
     print(f"[ERROR] {field_name} が見つかりませんでした。")
-    print(f"        現在のURL: {page.url}")
-    print(f"        ページタイトル: {page.title()}")
     raise TimeoutError(f"{field_name} の取得に失敗しました。")
 
 
 def click_button_element(page, selectors, button_name="ボタン"):
-    """ボタン要素を検索してクリック"""
+    """ボタン要素を強力に検索してクリック (force=True 対応)"""
     start_time = time.time()
-    while time.time() - start_time < 15:
+    while time.time() - start_time < 20:
         loc = find_locator_in_page_or_frames(page, selectors)
         if loc:
             try:
-                loc.click()
+                loc.scroll_into_view_if_needed()
+                page.wait_for_timeout(500)
+                try:
+                    loc.click(timeout=2000)
+                except Exception:
+                    loc.click(force=True)
                 return True
             except Exception:
                 pass
         page.wait_for_timeout(1000)
-    print(f"   --> [{button_name}] のクリック対象が見つからないためスキップします。")
+    print(f"   --> [{button_name}] のクリック対象が見つからないか、クリックできませんでした。")
     return False
 
 
 def set_checkbox_checked(page, selectors, checkbox_name="チェックボックス"):
-    """チェックボックス要素を検索してオン（チェック状態）にする"""
+    """チェックボックス要素を確実にオン（チェック状態）にする"""
     start_time = time.time()
-    while time.time() - start_time < 15:
+    while time.time() - start_time < 20:
         loc = find_locator_in_page_or_frames(page, selectors)
         if loc:
             try:
+                loc.scroll_into_view_if_needed()
+                page.wait_for_timeout(500)
                 if not loc.is_checked():
-                    loc.check()
+                    try:
+                        loc.check(force=True, timeout=2000)
+                    except Exception:
+                        loc.click(force=True)
                 return True
             except Exception:
                 pass
         page.wait_for_timeout(1000)
-    print(f"   --> [{checkbox_name}] が見つからないためチェック設定をスキップします。")
+    print(f"   --> [{checkbox_name}] の設定に失敗しました。")
     return False
+
+
+def handle_initial_msgbox(page):
+    """画面表示直後に出るポップアップ（MsgBoxBtnOK）を処理する"""
+    print("   --> メッセージボックス（MsgBoxBtnOK）の表示を確認中...")
+    msg_box_selectors = [
+        "#MsgBoxBtnOK",
+        "button#MsgBoxBtnOK",
+        "button:has-text('OK')"
+    ]
+    if click_button_element(page, msg_box_selectors, "初期ポップアップのOKボタン"):
+        print("   --> ★ 初期メッセージボックスの『OK』をクリックしました。")
+        page.wait_for_timeout(2000)
+    else:
+        print("   --> 初期メッセージボックスは表示されませんでした。")
 
 
 def get_main_table(target_context):
@@ -200,7 +229,7 @@ def handle_popups_and_wait(page, url_name):
     print(f"   --> [{url_name}] 画面の更新・データ処理中（30秒間待機）...")
     page.wait_for_timeout(30000)
 
-    ok_selectors = ["button:has-text('OK')", "input[value='OK']", "a:has-text('OK')", "button:has-text('確認')", "input[value='確認']"]
+    ok_selectors = ["#MsgBoxBtnOK", "button:has-text('OK')", "input[value='OK']", "a:has-text('OK')", "button:has-text('確認')"]
     if click_button_element(page, ok_selectors, f"{url_name} - OKボタン"):
         print(f"   --> [{url_name}] ポップアップで『OK』をクリックしました！")
         page.wait_for_timeout(3000)
@@ -486,13 +515,17 @@ def run():
         print("\n6. 1つ目の目的ページ（EA1100W）へ移動中...")
         page.wait_for_timeout(5000)
         page.goto(URL_EA1100W, wait_until="networkidle")
-        print("   --> ページの完全ロード完了を待機中 (6秒間)")
-        page.wait_for_timeout(6000)
+        print("   --> ページの完全ロード完了を待機中 (8秒間)")
+        page.wait_for_timeout(8000)
 
-        # 1. 「クリア(R)」ボタンを直接クリック
+        # ★ 最優先：画面表示時にポップアップが出た場合は「OK」を押す
+        handle_initial_msgbox(page)
+
+        # 1. 「クリア(R)」ボタン（#input33）を直接クリック
         print("   --> [EA1100W] 『クリア(R)』ボタンをクリック中...")
         clear_btn_selectors = [
             "#input33",
+            "button#input33",
             "button:has-text('クリア')",
             "button[value*='クリア']"
         ]
@@ -501,26 +534,39 @@ def run():
         else:
             print("   --> 『クリア』ボタンが見つかりませんでした。")
         
-        # クリア処理後の描画待ち
-        page.wait_for_timeout(3000)
+        # クリア処理後の描画完了を待機
+        page.wait_for_timeout(4000)
 
-        # 2. 2つのチェックボックス（#input23, #input24）をオンにする
-        print("   --> [EA1100W] 指定のチェックボックスをオンに設定中...")
+        # 2. 指定のチェックボックス（input23, input24, input25/エラー）をオンにする
+        print("   --> [EA1100W] チェックボックス（エラー項目含む）をオンに設定中...")
         chk1_selectors = ["#input23", "input[type='checkbox']#input23"]
         chk2_selectors = ["#input24", "input[type='checkbox']#input24"]
-
-        if set_checkbox_checked(page, chk1_selectors, "チェックボックス1(input23)"):
-            print("   --> チェックボックス(input23) をオンに設定しました。")
-        if set_checkbox_checked(page, chk2_selectors, "チェックボックス2(input24)"):
-            print("   --> チェックボックス(input24) をオンに設定しました。")
         
-        # チェックボックス設定後の待機
-        page.wait_for_timeout(2000)
+        err_chk_selectors = [
+            "#input25",
+            "input[type='checkbox']#input25",
+            "label:has-text('エラー') input",
+            "input[type='checkbox']:has-text('エラー')",
+            "tr:has-text('エラー') input[type='checkbox']"
+        ]
 
-        # 3. 「検索(F)」ボタンを直接クリック
+        if set_checkbox_checked(page, chk1_selectors, "チェックボックス(input23)"):
+            print("   --> チェックボックス(input23) をオンに設定しました。")
+            
+        if set_checkbox_checked(page, chk2_selectors, "チェックボックス(input24)"):
+            print("   --> チェックボックス(input24) をオンに設定しました。")
+            
+        if set_checkbox_checked(page, err_chk_selectors, "エラーチェックボックス"):
+            print("   --> エラーのチェックボックス をオンに設定しました。")
+
+        # チェック完了後の反映待機
+        page.wait_for_timeout(3000)
+
+        # 3. 「検索(F)」ボタン（#input34）を直接クリック
         print("   --> [EA1100W] 『検索(F)』ボタンをクリック中...")
         search_btn_selectors = [
             "#input34",
+            "button#input34",
             "button:has-text('検索')",
             "button[value*='検索']"
         ]
@@ -530,17 +576,12 @@ def run():
             print("   --> 『検索』ボタンが見つかりませんでした。")
 
         # 検索処理・通信完了の待機
-        print("   --> 検索結果の読み込みを待機中 (5秒間)...")
-        page.wait_for_timeout(5000)
+        print("   --> 検索結果の読み込みを待機中 (6秒間)...")
+        page.wait_for_timeout(6000)
 
-        # 4. ポップアップで「OK」をクリックする
+        # 4. 検索後にダイアログが出た場合の「OK」クリック
         print("   --> [EA1100W] ポップアップ確認（OKボタン待ち）...")
-        ok_selectors = ["button:has-text('OK')", "input[value='OK']", "a:has-text('OK')", "button:has-text('確認')", "input[value='確認']"]
-        if click_button_element(page, ok_selectors, "EA1100W - 検索後OKボタン"):
-            print("   --> ポップアップで『OK』をクリックしました！")
-            page.wait_for_timeout(3000)
-        else:
-            print("   --> 『OK』ポップアップは検出されませんでした。そのまま進みます。")
+        handle_initial_msgbox(page)
 
         # 5. 表のデータを取得
         ea_data = scrape_table_data(page, "EA1100W")
