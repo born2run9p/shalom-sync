@@ -29,13 +29,14 @@ SPREADSHEET_KEY_2 = "1cb8gOz19iN6IR7hXbPnlifDXMvcN91amOMG_raSQoTs"
 # シートGID定義
 GID_EA1100W = 910840628
 GID_MP0002W = 1520113795
-GID_THIRD = 142323017      # ★ 追加: 3つ目のシートのGID
+GID_THIRD = 142323017      # 3つ目のシート（e-Gov申請）のGID
 GID_COMBINED = 368650283
 GID_FILTERED = 282241935
 
 # URL定義
 URL_EA1100W = "https://4ever.shalom-house.jp/EA1100W"
 URL_MP0002W = "https://4ever.shalom-house.jp/MP0002W"
+URL_EGOV = "https://shinsei.e-gov.go.jp/recept/client-startup/"  # ★ e-Gov起動URL
 
 # 統合シート用（10項目）
 TARGET_COLUMNS = [
@@ -165,14 +166,11 @@ def set_checkbox_checked(page, selectors, checkbox_name="チェックボック�
 
 
 def handle_ea1100w_dialog_sequence(page):
-    """
-    整理されたフローに基づく EA1100W 遷移時のダイアログ連鎖処理
-    """
+    """整理されたフローに基づく EA1100W 遷移時のダイアログ連鎖処理"""
     print("   --> EA1100W アクセス直後のダイアログ処理を開始します...")
     ok_selectors = ["#MsgBoxBtnOK", "button#MsgBoxBtnOK", "button:has-text('OK')"]
     yes_selectors = ["#MsgBoxBtnYes", "button#MsgBoxBtnYes", "button:has-text('はい')"]
 
-    # --- Step 1: 初回のOKボタン存在チェック ---
     has_initial_ok = click_button_element(page, ok_selectors, "初回 OKボタン", timeout_sec=3)
 
     if has_initial_ok:
@@ -180,33 +178,26 @@ def handle_ea1100w_dialog_sequence(page):
         print("       [1/4] 1つ目の「OK」をクリックしました。")
         page.wait_for_timeout(2000)
 
-        # 2つ目のメッセージボックス ➜ 「はい(Y)」を押す
         if click_button_element(page, yes_selectors, "はい(Y)ボタン", timeout_sec=10):
             print("       [2/4] 「はい(Y)」をクリックしました。データ読み込み中...")
         
-        # 処理待ち
         page.wait_for_timeout(15000)
 
-        # 3つ目のメッセージボックス ➜ 「OK」を押す
         if click_button_element(page, ok_selectors, "2回目の OKボタン", timeout_sec=15):
             print("       [3/4] 「OK」をクリックしました。")
             page.wait_for_timeout(2000)
 
-        # 4つ目のメッセージボックス ➜ 「OK」を押す
         if click_button_element(page, ok_selectors, "3回目の OKボタン", timeout_sec=10):
             print("       [4/4] 「OK」をクリックしました。")
             page.wait_for_timeout(2000)
 
     else:
         print("   --> 【分岐: パターンB】メッセージボックス（OK）は出ていませんでした。")
-        # 直接「はい(Y)」を押す
         if click_button_element(page, yes_selectors, "はい(Y)ボタン", timeout_sec=10):
             print("       [1/2] 「はい(Y)」をクリックしました。データ読み込み中...")
         
-        # 処理待ち
         page.wait_for_timeout(15000)
 
-        # 続いてメッセージボックス ➜ 「OK」を押す
         if click_button_element(page, ok_selectors, "OKボタン", timeout_sec=15):
             print("       [2/2] 「OK」をクリックしました。")
             page.wait_for_timeout(2000)
@@ -424,7 +415,6 @@ def process_and_align_data(raw_data, source_label):
     if "現在状況 日時" in df.columns:
         df["現在状況 日時"] = df["現在状況 日時"].apply(clean_status_value).apply(format_datetime_str)
 
-    # 元のデータ内に「データ元」が存在する場合はそのまま使い、未設定時のみ引数の source_label を補う
     if "データ元" not in df.columns or df["データ元"].str.strip().eq("").all():
         df["データ元"] = source_label
     
@@ -549,50 +539,40 @@ def run():
         page.goto(URL_EA1100W, wait_until="networkidle")
         page.wait_for_timeout(5000)
 
-        # ★ ダイアログの連続処理（パターンA/B自動判定）
         handle_ea1100w_dialog_sequence(page)
 
-        # 1. 「検索エリアをひらく」（#toggle）が存在したら押す
         toggle_selectors = ["#toggle", "a#toggle", "a:has-text('検索エリアをひらく')"]
         if click_button_element(page, toggle_selectors, "検索エリアをひらく", timeout_sec=3):
             print("   --> 『検索エリアをひらく』をクリックしました。")
             page.wait_for_timeout(1500)
 
-        # 2. 「クリア(R)」ボタン（#input33）を押す
         print("   --> [EA1100W] 『クリア(R)』ボタンをクリック中...")
         clear_btn_selectors = ["#input33", "button#input33", "button:has-text('クリア')"]
         click_button_element(page, clear_btn_selectors, "クリアボタン", timeout_sec=10)
         page.wait_for_timeout(3000)
 
-        # 3. チェックボックスの指定オン設定
-        # 手続終了 (#input23)
         print("   --> [EA1100W] 『手続終了』(input23) チェックボックスをオンに設定中...")
         chk_end_selectors = ["#input23", "input[type='checkbox']#input23"]
         set_checkbox_checked(page, chk_end_selectors, "手続終了チェックボックス")
 
-        # エラー (#input24)
         print("   --> [EA1100W] 『エラー』(input24) チェックボックスをオンに設定中...")
         chk_err_selectors = ["#input24", "input[type='checkbox']#input24"]
         set_checkbox_checked(page, chk_err_selectors, "エラーチェックボックス")
 
         page.wait_for_timeout(2000)
 
-        # 4. 「検索(F)」ボタン（#input34）を押す
         print("   --> [EA1100W] 『検索(F)』ボタンをクリック中...")
         search_btn_selectors = ["#input34", "button#input34", "button:has-text('検索')"]
         click_button_element(page, search_btn_selectors, "検索ボタン", timeout_sec=10)
 
-        # 検索後の結果読み込み待機
         print("   --> 検索完了待機中 (6秒間)...")
         page.wait_for_timeout(6000)
 
-        # 5. 検索後のダイアログ（OK）を押す
         ok_selectors = ["#MsgBoxBtnOK", "button#MsgBoxBtnOK", "button:has-text('OK')"]
         if click_button_element(page, ok_selectors, "検索後 OKボタン", timeout_sec=5):
             print("   --> 検索後の『OK』ボタンをクリックしました。")
             page.wait_for_timeout(2000)
 
-        # 6. 表のデータをスクロールして全て取得
         ea_data = scrape_table_data(page, "EA1100W")
 
         print(f"\n7. スプレッドシート（EA1100W用 gid: {GID_EA1100W}）を更新中...")
@@ -613,7 +593,7 @@ def run():
 
         browser.close()
 
-    # --- ★ ⑤ 3つ目のシート（gid: 142323017）の取得 ---
+    # --- ⑤ 3つ目のシート（gid: 142323017）の取得 ---
     print(f"\n10. 3つ目のスプレッドシート（gid: {GID_THIRD}）からデータを取得中...")
     ws_third = doc1.get_worksheet_by_id(GID_THIRD)
     third_data = ws_third.get_all_values() if ws_third else []
@@ -622,9 +602,8 @@ def run():
     print("\n11. 3つのシートデータの整形および10項目への統合処理中...")
     df_ea = process_and_align_data(ea_data, "電子申請")
     df_mp = process_and_align_data(mp_data, "マイナ申請")
-    df_third = process_and_align_data(third_data, "その他")
+    df_third = process_and_align_data(third_data, "e-Gov申請")  # ★ データ元名を「e-Gov申請」に設定
 
-    # 3つの DataFrame を結合
     combined_df = pd.concat([df_ea, df_mp, df_third], ignore_index=True)
 
     for col in combined_df.columns:
@@ -649,12 +628,15 @@ def run():
     for col in pickup_df.columns:
         pickup_df[col] = pickup_df[col].apply(clean_cell_text)
 
+    # ★ データ元リンクの生成（e-Gov申請用URLを分岐追加）
     def generate_source_hyperlink(source_val):
         source = str(source_val)
         if source == "電子申請":
             return f'=HYPERLINK("{URL_EA1100W}", "{source}")'
         elif source == "マイナ申請":
             return f'=HYPERLINK("{URL_MP0002W}", "{source}")'
+        elif source == "e-Gov申請":
+            return f'=HYPERLINK("{URL_EGOV}", "{source}")'  # ★ e-Gov起動URLをセット
         return source
 
     if "データ元" in pickup_df.columns:
