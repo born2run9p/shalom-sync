@@ -29,6 +29,7 @@ SPREADSHEET_KEY_2 = "1cb8gOz19iN6IR7hXbPnlifDXMvcN91amOMG_raSQoTs"
 # シートGID定義
 GID_EA1100W = 910840628
 GID_MP0002W = 1520113795
+GID_THIRD = 142323017      # ★ 追加: 3つ目のシートのGID
 GID_COMBINED = 368650283
 GID_FILTERED = 282241935
 
@@ -387,7 +388,7 @@ def format_datetime_str(val):
 
 
 def process_and_align_data(raw_data, source_label):
-    """スクレイピングデータを10項目の標準カラムフォーマットに変換・補正する"""
+    """スクレイピングまたはシートから取得したデータを10項目の標準カラムフォーマットに変換・補正する"""
     if not raw_data or len(raw_data) < 2:
         return pd.DataFrame(columns=TARGET_COLUMNS)
 
@@ -423,7 +424,10 @@ def process_and_align_data(raw_data, source_label):
     if "現在状況 日時" in df.columns:
         df["現在状況 日時"] = df["現在状況 日時"].apply(clean_status_value).apply(format_datetime_str)
 
-    df["データ元"] = source_label
+    # 元のデータ内に「データ元」が存在する場合はそのまま使い、未設定時のみ引数の source_label を補う
+    if "データ元" not in df.columns or df["データ元"].str.strip().eq("").all():
+        df["データ元"] = source_label
+    
     df["最終更新日時"] = now_str
 
     res_df = df[TARGET_COLUMNS].copy()
@@ -591,7 +595,7 @@ def run():
         # 6. 表のデータをスクロールして全て取得
         ea_data = scrape_table_data(page, "EA1100W")
 
-        print("\n7. スプレッドシート（EA1100W用 gid: 910840628）を更新中...")
+        print(f"\n7. スプレッドシート（EA1100W用 gid: {GID_EA1100W}）を更新中...")
         if update_worksheet_by_gid(doc1, GID_EA1100W, ea_data):
             print(f"★【成功】EA1100W のデータ {len(ea_data)} 行を書き込みました！")
 
@@ -603,30 +607,37 @@ def run():
         handle_popups_and_wait(page, "MP0002W")
         mp_data = scrape_table_data(page, "MP0002W")
 
-        print("\n9. スプレッドシート（MP0002W用 gid: 1520113795）を更新中...")
+        print(f"\n9. スプレッドシート（MP0002W用 gid: {GID_MP0002W}）を更新中...")
         if update_worksheet_by_gid(doc1, GID_MP0002W, mp_data):
             print(f"★【成功】MP0002W のデータ {len(mp_data)} 行を書き込みました！")
 
         browser.close()
 
-    # --- ⑤ データの統合・10項目フォーマット化 ---
-    print("\n10. データの整形および10項目への統合処理中...")
+    # --- ★ ⑤ 3つ目のシート（gid: 142323017）の取得 ---
+    print(f"\n10. 3つ目のスプレッドシート（gid: {GID_THIRD}）からデータを取得中...")
+    ws_third = doc1.get_worksheet_by_id(GID_THIRD)
+    third_data = ws_third.get_all_values() if ws_third else []
+
+    # --- ⑥ 3つのデータの統合・10項目フォーマット化 ---
+    print("\n11. 3つのシートデータの整形および10項目への統合処理中...")
     df_ea = process_and_align_data(ea_data, "電子申請")
     df_mp = process_and_align_data(mp_data, "マイナ申請")
+    df_third = process_and_align_data(third_data, "その他")
 
-    combined_df = pd.concat([df_ea, df_mp], ignore_index=True)
+    # 3つの DataFrame を結合
+    combined_df = pd.concat([df_ea, df_mp, df_third], ignore_index=True)
 
     for col in combined_df.columns:
         combined_df[col] = combined_df[col].apply(clean_cell_text)
 
     combined_matrix = [combined_df.columns.tolist()] + combined_df.fillna("").values.tolist()
 
-    print("11. 統合スプレッドシート（gid: 368650283）を更新中...")
+    print(f"12. 統合スプレッドシート（gid: {GID_COMBINED}）を更新中...")
     if update_worksheet_by_gid(doc1, GID_COMBINED, combined_matrix):
         print(f"★【成功】統合データ {len(combined_df)} 件を書き込みました！")
 
-    # --- ⑥ フィルタリング処理 ---
-    print("\n12. 条件（現在状況:『終了』かつ 公文書保管完了:『済』）の除外フィルタリング実行中...")
+    # --- ⑦ フィルタリング処理 ---
+    print("\n13. 条件（現在状況:『終了』かつ 公文書保管完了:『済』）の除外フィルタリング実行中...")
     
     cond_status = combined_df["現在状況"].astype(str).str.contains("終了", na=False)
     cond_doc = combined_df["公文書保管完了"].astype(str).str.contains("済", na=False)
@@ -651,7 +662,7 @@ def run():
 
     filtered_matrix = [pickup_df.columns.tolist()] + pickup_df.fillna("").values.tolist()
 
-    print("13. ピックアップ用スプレッドシート（別ブック gid: 282241935）を更新中...")
+    print(f"14. ピックアップ用スプレッドシート（別ブック gid: {GID_FILTERED}）を更新中...")
     if update_worksheet_by_gid(doc2, GID_FILTERED, filtered_matrix):
         print(f"★【成功】ピックアップデータ {len(pickup_df)} 件を更新し、A列にハイパーリンクを設定しました！")
 
