@@ -3,11 +3,8 @@ import os
 import sys
 import json
 import time
-import datetime
-import re
 import pyotp
 import gspread
-import pandas as pd
 from google.oauth2.service_account import Credentials
 from playwright.sync_api import sync_playwright
 
@@ -21,36 +18,18 @@ if hasattr(sys.stdout, 'reconfigure'):
 SHALOM_ID = os.environ.get("SHALOM_ID", "145371-01")
 SHALOM_PASS = os.environ.get("SHALOM_PASS")
 TOTP_SECRET = os.environ.get("TOTP_SECRET")
+GCP_SA_KEY = os.environ.get("GCP_SA_KEY")
 
 # スプレッドシートID
 SPREADSHEET_KEY_1 = "12drmIzzXsTyx_16TBOzTWxMygNrBuQv_r-8HSnT_V34"
-SPREADSHEET_KEY_2 = "1cb8gOz19iN6IR7hXbPnlifDXMvcN91amOMG_raSQoTs"
 
 # シートGID定義
 GID_EA1100W = 910840628
 GID_MP0002W = 1520113795
-GID_THIRD = 142323017      # 3つ目のシート（e-Gov申請）のGID
-GID_COMBINED = 368650283
-GID_FILTERED = 282241935
 
 # URL定義
 URL_EA1100W = "https://4ever.shalom-house.jp/EA1100W"
 URL_MP0002W = "https://4ever.shalom-house.jp/MP0002W"
-URL_EGOV = "https://shinsei.e-gov.go.jp/recept/client-startup/"  # ★ e-Gov起動URL
-
-# 統合シート用（10項目）
-TARGET_COLUMNS = [
-    "番号", "事業所名", "種別", "手続名", "被保険者名",
-    "現在状況", "現在状況 日時", "データ元", "公文書保管完了", "最終更新日時"
-]
-
-# ピックアップシート用（9項目）
-PICKUP_COLUMNS = [
-    "データ元", "番号", "事業所名", "種別", "手続名",
-    "被保険者名", "現在状況", "現在状況 日時", "最終更新日時"
-]
-
-GCP_SA_KEY = os.environ.get("GCP_SA_KEY")
 
 
 def get_gspread_client():
@@ -65,22 +44,6 @@ def get_gspread_client():
     sa_info = json.loads(GCP_SA_KEY)
     creds = Credentials.from_service_account_info(sa_info, scopes=scopes)
     return gspread.authorize(creds)
-
-
-def clean_cell_text(val):
-    """セル値の前後の不要な空白（半角・全角・改行・タブ）を安全に除去する"""
-    if not val or pd.isna(val):
-        return ""
-    return str(val).strip(' \t\n\r\u3000')
-
-
-def clean_status_value(val):
-    """(100%) や 100% などのパーセント表記を取り除く"""
-    if not val or pd.isna(val):
-        return ""
-    val_str = str(val)
-    cleaned = re.sub(r'[\(（]?\s*[0-9０-９]+\s*[%％]\s*[\)）]?', '', val_str)
-    return clean_cell_text(cleaned)
 
 
 def find_locator_in_page_or_frames(page, selectors):
@@ -323,110 +286,6 @@ def scrape_table_data(page, url_name):
     return scraped_data
 
 
-def format_datetime_str(val):
-    """和暦（令和/平成/R/H）を含む文字列を yyyy/mm/dd hh:mm:ss 形式に変換する関数"""
-    if not val or pd.isna(val):
-        return ""
-    val_str = str(val).strip()
-    if not val_str:
-        return ""
-
-    val_str = val_str.translate(str.maketrans({
-        '０':'0','１':'1','２':'2','３':'3','４':'4',
-        '５':'5','６':'6','７':'7','８':'8','９':'9',
-        '：':':','／':'/','．':'.'
-    }))
-
-    wareki_match = re.search(r'(令和|平成|R|H)\s*([0-9元]+)\s*[\.年/]\s*([0-9]+)\s*[\.月/]\s*([0-9]+)', val_str, re.IGNORECASE)
-    
-    if wareki_match:
-        era = wareki_match.group(1).upper()
-        year_str = wareki_match.group(2)
-        month = int(wareki_match.group(3))
-        day = int(wareki_match.group(4))
-
-        year_num = 1 if year_str == "元" else int(year_str)
-
-        if era in ["令和", "R"]:
-            seireki_year = 2018 + year_num
-        elif era in ["平成", "H"]:
-            seireki_year = 1988 + year_num
-        else:
-            seireki_year = year_num
-
-        time_match = re.search(r'([0-9]{1,2})\s*[:時]\s*([0-9]{1,2})(?:\s*[:分]\s*([0-9]{1,2}))?', val_str)
-        if time_match:
-            hour = int(time_match.group(1))
-            minute = int(time_match.group(2))
-            second = int(time_match.group(3)) if time_match.group(3) else 0
-        else:
-            hour, minute, second = 0, 0, 0
-
-        try:
-            dt = datetime.datetime(seireki_year, month, day, hour, minute, second)
-            return dt.strftime("%Y/%m/%d %H:%M:%S")
-        except Exception:
-            pass
-
-    try:
-        dt = pd.to_datetime(val_str)
-        if pd.notna(dt):
-            return dt.strftime("%Y/%m/%d %H:%M:%S")
-    except Exception:
-        pass
-
-    return val_str
-
-
-def process_and_align_data(raw_data, source_label):
-    """スクレイピングまたはシートから取得したデータを10項目の標準カラムフォーマットに変換・補正する"""
-    if not raw_data or len(raw_data) < 2:
-        return pd.DataFrame(columns=TARGET_COLUMNS)
-
-    headers = [str(h).strip() for h in raw_data[0]]
-    rows = raw_data[1:]
-
-    header_len = len(headers)
-    normalized_rows = []
-    for r in rows:
-        if len(r) < header_len:
-            r = r + [""] * (header_len - len(r))
-        elif len(r) > header_len:
-            r = r[:header_len]
-        normalized_rows.append(r)
-
-    df = pd.DataFrame(normalized_rows, columns=headers)
-    now_str = datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-
-    if source_label == "電子申請":
-        if "到達番号" in df.columns:
-            df["番号"] = df["到達番号"]
-    elif source_label == "マイナ申請":
-        if "受付番号" in df.columns:
-            df["番号"] = df["受付番号"]
-
-    for col in TARGET_COLUMNS:
-        if col not in df.columns:
-            df[col] = ""
-
-    if "現在状況" in df.columns:
-        df["現在状況"] = df["現在状況"].apply(clean_status_value)
-
-    if "現在状況 日時" in df.columns:
-        df["現在状況 日時"] = df["現在状況 日時"].apply(clean_status_value).apply(format_datetime_str)
-
-    if "データ元" not in df.columns or df["データ元"].str.strip().eq("").all():
-        df["データ元"] = source_label
-    
-    df["最終更新日時"] = now_str
-
-    res_df = df[TARGET_COLUMNS].copy()
-    for col in res_df.columns:
-        res_df[col] = res_df[col].apply(clean_cell_text)
-
-    return res_df
-
-
 def update_worksheet_by_gid(doc, gid, raw_matrix):
     """GIDから指定ワークシートを取得し、データを更新する"""
     try:
@@ -445,9 +304,7 @@ def update_worksheet_by_gid(doc, gid, raw_matrix):
 def run():
     print("1. Googleスプレッドシートに接続中...")
     gc = get_gspread_client()
-    
     doc1 = gc.open_by_key(SPREADSHEET_KEY_1)
-    doc2 = gc.open_by_key(SPREADSHEET_KEY_2)
 
     print("2. 自動ブラウザを起動して社労夢にアクセス中...")
     with sync_playwright() as p:
@@ -593,62 +450,7 @@ def run():
 
         browser.close()
 
-    # --- ⑤ 3つ目のシート（gid: 142323017）の取得 ---
-    print(f"\n10. 3つ目のスプレッドシート（gid: {GID_THIRD}）からデータを取得中...")
-    ws_third = doc1.get_worksheet_by_id(GID_THIRD)
-    third_data = ws_third.get_all_values() if ws_third else []
-
-    # --- ⑥ 3つのデータの統合・10項目フォーマット化 ---
-    print("\n11. 3つのシートデータの整形および10項目への統合処理中...")
-    df_ea = process_and_align_data(ea_data, "電子申請")
-    df_mp = process_and_align_data(mp_data, "マイナ申請")
-    df_third = process_and_align_data(third_data, "e-Gov申請")  # ★ データ元名を「e-Gov申請」に設定
-
-    combined_df = pd.concat([df_ea, df_mp, df_third], ignore_index=True)
-
-    for col in combined_df.columns:
-        combined_df[col] = combined_df[col].apply(clean_cell_text)
-
-    combined_matrix = [combined_df.columns.tolist()] + combined_df.fillna("").values.tolist()
-
-    print(f"12. 統合スプレッドシート（gid: {GID_COMBINED}）を更新中...")
-    if update_worksheet_by_gid(doc1, GID_COMBINED, combined_matrix):
-        print(f"★【成功】統合データ {len(combined_df)} 件を書き込みました！")
-
-    # --- ⑦ フィルタリング処理 ---
-    print("\n13. 条件（現在状況:『終了』かつ 公文書保管完了:『済』）の除外フィルタリング実行中...")
-    
-    cond_status = combined_df["現在状況"].astype(str).str.contains("終了", na=False)
-    cond_doc = combined_df["公文書保管完了"].astype(str).str.contains("済", na=False)
-
-    filtered_df = combined_df[~(cond_status & cond_doc)].copy()
-
-    pickup_df = filtered_df[PICKUP_COLUMNS].copy()
-
-    for col in pickup_df.columns:
-        pickup_df[col] = pickup_df[col].apply(clean_cell_text)
-
-    # ★ データ元リンクの生成（e-Gov申請用URLを分岐追加）
-    def generate_source_hyperlink(source_val):
-        source = str(source_val)
-        if source == "電子申請":
-            return f'=HYPERLINK("{URL_EA1100W}", "{source}")'
-        elif source == "マイナ申請":
-            return f'=HYPERLINK("{URL_MP0002W}", "{source}")'
-        elif source == "e-Gov申請":
-            return f'=HYPERLINK("{URL_EGOV}", "{source}")'  # ★ e-Gov起動URLをセット
-        return source
-
-    if "データ元" in pickup_df.columns:
-        pickup_df["データ元"] = pickup_df["データ元"].apply(generate_source_hyperlink)
-
-    filtered_matrix = [pickup_df.columns.tolist()] + pickup_df.fillna("").values.tolist()
-
-    print(f"14. ピックアップ用スプレッドシート（別ブック gid: {GID_FILTERED}）を更新中...")
-    if update_worksheet_by_gid(doc2, GID_FILTERED, filtered_matrix):
-        print(f"★【成功】ピックアップデータ {len(pickup_df)} 件を更新し、A列にハイパーリンクを設定しました！")
-
-    print("\nすべての同期・更新プロセスが正常に完了しました。")
+    print("\nすべてのスクレイピングおよびシート書き込みプロセスが正常に完了しました。")
 
 
 if __name__ == "__main__":
