@@ -1,5 +1,5 @@
 def collect_visible_rows_from_main_table(main_table, is_first_fetch=False):
-    """メインテーブルのみから行データを抽出する（改行以降の文字列を削除）"""
+    """メインテーブルのみから行データを抽出する（改行以降の文字列を確実に削除）"""
     extracted_rows = []
     if not main_table:
         return extracted_rows
@@ -12,15 +12,18 @@ def collect_visible_rows_from_main_table(main_table, is_first_fetch=False):
         if not is_first_fetch and th_count > 0 and td_count == 0:
             continue
 
-        cells = row.locator("th, td").all_text_contents()
-        clean_cells = []
-        for c in cells:
-            # 1. 改行文字 (\r\n, \n, \r) で分割し、1行目（改行より前）だけを取得
-            first_line = c.splitlines()[0] if c.splitlines() else ""
-            # 2. 前後の不要な空白をトリム
-            clean_cells.append(first_line.strip())
+        # 各セル（th/td）のinnerTextを評価し、最初の改行以降をカット
+        cells = row.locator("th, td").evaluate_all("""
+            elements => elements.map(el => {
+                // <br> タグを改行コードに置換したうえで innerText を取得
+                let text = el.innerText || el.textContent || "";
+                // 最初に見つかる改行（\n や \r）または半角/全角の改行タグ以降をすべて削除
+                let firstLine = text.split(/[\r\n]+/)[0];
+                return firstLine ? firstLine.trim() : "";
+            })
+        """)
 
-        if any(clean_cells):
-            extracted_rows.append(clean_cells)
+        if any(cells):
+            extracted_rows.append(cells)
 
     return extracted_rows
