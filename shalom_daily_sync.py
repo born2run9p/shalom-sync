@@ -3,6 +3,7 @@ import os
 import sys
 import json
 import time
+from datetime import datetime
 import pyotp
 import gspread
 from google.oauth2.service_account import Credentials
@@ -26,6 +27,7 @@ SPREADSHEET_KEY_1 = "12drmIzzXsTyx_16TBOzTWxMygNrBuQv_r-8HSnT_V34"
 # シートGID定義
 GID_EA1100W = 910840628
 GID_MP0002W = 1520113795
+GID_LAST_UPDATE = 1090515274  # 最終更新シートのGID
 
 # URL定義
 URL_EA1100W = "https://4ever.shalom-house.jp/EA1100W"
@@ -301,6 +303,23 @@ def update_worksheet_by_gid(doc, gid, raw_matrix):
         return False
 
 
+def update_last_updated_timestamp(doc, gid):
+    """指定GID（最終更新シート）の A1 セルに現在日時を書き込む"""
+    try:
+        ws = doc.get_worksheet_by_id(gid)
+        if not ws:
+            print(f"[WARNING] 最終更新シート (GID: {gid}) が見つかりませんでした。")
+            return False
+        
+        now_str = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+        ws.update(range_name='A1', values=[[now_str]], value_input_option='USER_ENTERED')
+        print(f"★【最終更新日時記録】「最終更新」シートのA1に '{now_str}' を書き込みました。")
+        return True
+    except Exception as e:
+        print(f"[ERROR] 最終更新日時の記録中にエラーが発生しました: {e}")
+        return False
+
+
 def run():
     print("1. Googleスプレッドシートに接続中...")
     gc = get_gspread_client()
@@ -435,6 +454,8 @@ def run():
         print(f"\n7. スプレッドシート（EA1100W用 gid: {GID_EA1100W}）を更新中...")
         if update_worksheet_by_gid(doc1, GID_EA1100W, ea_data):
             print(f"★【成功】EA1100W のデータ {len(ea_data)} 行を書き込みました！")
+            # --- 電子申請（EA1100W）のデータ書き込みに成功したため、「最終更新」シートのA1に現在日時を書き込む ---
+            update_last_updated_timestamp(doc1, GID_LAST_UPDATE)
 
         # --- ④ 2つ目のページ（MP0002W）の処理 ---
         print("\n8. 2つ目の目的ページ（MP0002W）へ移動中...")
