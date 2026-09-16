@@ -292,30 +292,30 @@ def run():
         click_button_element(page, rdo_multi, "複数事業所指定ラジオボタン", timeout_sec=10)
         page.wait_for_timeout(1500)
 
-        # 4. 「選択」ボタン（DT0005WPersonOption_input4）を押す
+        # 4. 「選択」ボタン（無効化されていない活性状態のものをクリック）
         print("   --> 「選択」ボタンをクリック中...")
-        btn_select_selector = "#DT0005WPersonOption_input4"
+        btn_select_selector = "button#DT0005WPersonOption_input4:not([disabled])"
         page.wait_for_selector(btn_select_selector, state="visible", timeout=10000)
-        page.locator(btn_select_selector).click(force=True)
+        page.locator(btn_select_selector).first.click(force=True)
         page.wait_for_timeout(3000)
 
         # 5. モーダル内の「全選択」ボタン（#input3）が表示されるのを待機してクリック
         print("   --> モーダル内「全選択」をクリック中...")
-        btn_all_select_selector = "button#input3, button:has-text('全選択')"
+        btn_all_select_selector = "button#input3:not([disabled]), button:has-text('全選択'):not([disabled])"
         page.wait_for_selector(btn_all_select_selector, state="visible", timeout=15000)
         page.locator(btn_all_select_selector).first.click(force=True)
         page.wait_for_timeout(2000)
 
         # 6. モーダル内「選択」ボタン（#input12）をクリック
         print("   --> モーダル内「選択」をクリック中...")
-        btn_modal_confirm_selector = "button#input12"
+        btn_modal_confirm_selector = "button#input12:not([disabled])"
         page.wait_for_selector(btn_modal_confirm_selector, state="visible", timeout=10000)
         page.locator(btn_modal_confirm_selector).first.click(force=True)
         page.wait_for_timeout(3000)
 
         # 7. 「出力」ボタンを押すと同時に「はい」ダイアログおよび「ダウンロード」を処理
         print("   --> 「出力」ボタンをクリック中...")
-        btn_output_selector = "button:has-text('出力')"
+        btn_output_selector = "button:has-text('出力'):not([disabled])"
         
         download = None
         with page.expect_download(timeout=40000) as download_info:
