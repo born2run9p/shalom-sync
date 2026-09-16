@@ -10,6 +10,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 from playwright.sync_api import sync_playwright
 
+# Windows環境でのログ文字化け防止
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
@@ -30,6 +31,7 @@ URL_DT0005W = "https://4ever.shalom-house.jp/DT0005W"
 
 
 def get_gspread_client():
+    """GCP Service Account Key から gspread クライアントを初期化"""
     if not GCP_SA_KEY:
         raise ValueError("[ERROR] GCP_SA_KEY 環境変数が設定されていません。")
     
@@ -42,72 +44,12 @@ def get_gspread_client():
     return gspread.authorize(creds)
 
 
-def find_input_in_page_or_frames(page, is_password=False):
-    """メインページおよびすべてのiframe内から入力欄を広域探索"""
-    input_type = "password" if is_password else "text"
-    
-    # 1. ページ本体から探索
-    inputs = page.locator("input").all()
-    for inp in inputs:
-        try:
-            p_type = inp.get_attribute("type") or "text"
-            p_name = inp.get_attribute("name") or ""
-            p_id = inp.get_attribute("id") or ""
-            
-            if is_password:
-                if p_type == "password" or "pass" in p_name.lower() or "pass" in p_id.lower():
-                    return inp
-            else:
-                if p_type in ["text", "email", "tel", ""] and p_type != "hidden" and p_type != "password":
-                    return inp
-        except Exception:
-            pass
-
-    # 2. iframe 内から探索
-    for frame in page.frames:
-        f_inputs = frame.locator("input").all()
-        for inp in f_inputs:
-            try:
-                p_type = inp.get_attribute("type") or "text"
-                p_name = inp.get_attribute("name") or ""
-                p_id = inp.get_attribute("id") or ""
-                
-                if is_password:
-                    if p_type == "password" or "pass" in p_name.lower() or "pass" in p_id.lower():
-                        return inp
-                else:
-                    if p_type in ["text", "email", "tel", ""] and p_type != "hidden" and p_type != "password":
-                        return inp
-            except Exception:
-                pass
-    return None
-
-
-def fill_login_field(page, value, is_password=False, field_name="入力欄"):
-    """ログイン入力欄を可視化待機して入力"""
-    start_time = time.time()
-    while time.time() - start_time < 30:
-        loc = find_input_in_page_or_frames(page, is_password=is_password)
-        if loc:
-            try:
-                loc.scroll_into_view_if_needed()
-                loc.click(force=True)
-                loc.fill("")
-                loc.type(value, delay=50)
-                return True
-            except Exception:
-                pass
-        page.wait_for_timeout(1000)
-    
-    print(f"[ERROR] {field_name} が見つかりませんでした。(現在のURL: {page.url})")
-    raise TimeoutError(f"{field_name} の取得に失敗しました。")
-
-
 def find_locator_in_page_or_frames(page, selectors):
+    """メインページおよびすべてのiframe内から対象ロケータを探索 (shalom_syncと同一)"""
     for selector in selectors:
         try:
             loc = page.locator(selector).first
-            if loc.count() > 0:
+            if loc.count() > 0 and loc.is_visible():
                 return loc
         except Exception:
             pass
@@ -115,7 +57,7 @@ def find_locator_in_page_or_frames(page, selectors):
         for frame in page.frames:
             try:
                 f_loc = frame.locator(selector).first
-                if f_loc.count() > 0:
+                if f_loc.count() > 0 and f_loc.is_visible():
                     return f_loc
             except Exception:
                 pass
@@ -123,12 +65,13 @@ def find_locator_in_page_or_frames(page, selectors):
 
 
 def fill_input_field(page, selectors, value, field_name="入力欄"):
+    """要素が存在するまで待機して値を入力 (shalom_syncと同一)"""
     start_time = time.time()
     while time.time() - start_time < 30:
         loc = find_locator_in_page_or_frames(page, selectors)
         if loc:
             try:
-                loc.scroll_into_view_if_needed()
+                loc.wait_for(state="visible", timeout=3000)
                 loc.click(force=True)
                 loc.fill("")
                 loc.type(value, delay=50)
@@ -137,11 +80,12 @@ def fill_input_field(page, selectors, value, field_name="入力欄"):
                 pass
         page.wait_for_timeout(1000)
     
-    print(f"[ERROR] {field_name} が見つかりませんでした。(現在のURL: {page.url})")
+    print(f"[ERROR] {field_name} が見つかりませんでした。")
     raise TimeoutError(f"{field_name} の取得に失敗しました。")
 
 
 def click_button_element(page, selectors, button_name="ボタン", timeout_sec=10):
+    """ボタン要素を検索してクリック (shalom_syncと同一)"""
     start_time = time.time()
     while time.time() - start_time < timeout_sec:
         loc = find_locator_in_page_or_frames(page, selectors)
@@ -161,6 +105,7 @@ def click_button_element(page, selectors, button_name="ボタン", timeout_sec=1
 
 
 def select_option_by_text_or_value(page, selectors, target_text, option_name="ドロップダウン"):
+    """ドロップダウンメニューからテキストまたは値で要素を選択"""
     start_time = time.time()
     while time.time() - start_time < 15:
         loc = find_locator_in_page_or_frames(page, selectors)
@@ -187,6 +132,7 @@ def select_option_by_text_or_value(page, selectors, target_text, option_name="�
 
 
 def parse_csv_bytes_get_ag_columns(file_bytes):
+    """ダウンロードしたCSVバイナリを読み込み、A列〜G列（0〜6列目）を抽出する"""
     text_content = None
     for encoding in ['cp932', 'shift_jis', 'utf-8-sig', 'utf-8']:
         try:
@@ -211,6 +157,7 @@ def parse_csv_bytes_get_ag_columns(file_bytes):
 
 
 def update_worksheet_ag_columns(doc, gid, raw_matrix):
+    """指定GIDのシートの既存データをクリアし、A1からA〜G列データを上書き書き込み"""
     try:
         ws = doc.get_worksheet_by_id(gid)
         if not ws:
@@ -256,20 +203,31 @@ def run():
             });
         """)
 
-        # --- ① ログイン処理 ---
+        # --- ① ログイン画面を開く (shalom_syncと完全一致) ---
         login_url = "https://4ever.shalom-house.jp/login"
         print(f"URLにアクセス中: {login_url}")
-        page.goto(login_url, wait_until="networkidle")
-        page.wait_for_timeout(5000)
+        page.goto(login_url, wait_until="load")
+        page.wait_for_timeout(3000)
 
+        # ID入力
+        id_selectors = [
+            "input[name='userId']", "input[name='id']", "input[name='loginId']",
+            "input[placeholder*='ID']", "input[placeholder*='ユーザー']",
+            "input[type='text']", "input:not([type='password']):not([type='hidden'])"
+        ]
         print(f"1. IDを入力中... ({SHALOM_ID})")
-        fill_login_field(page, SHALOM_ID, is_password=False, field_name="ID入力欄")
+        fill_input_field(page, id_selectors, SHALOM_ID, "ID入力欄")
         page.wait_for_timeout(1000)
 
+        # パスワード入力
+        pass_selectors = [
+            "input[type='password']", "input[name='password']", "input[name='pass']"
+        ]
         print("2. パスワードを入力中...")
-        fill_login_field(page, SHALOM_PASS, is_password=True, field_name="パスワード入力欄")
+        fill_input_field(page, pass_selectors, SHALOM_PASS, "パスワード入力欄")
         page.wait_for_timeout(1000)
 
+        # ログインボタンクリック
         print("3. ログインボタンをクリックします...")
         login_btn_selectors = [
             "button[type='submit']", "input[type='submit']",
@@ -277,9 +235,9 @@ def run():
         ]
         click_button_element(page, login_btn_selectors, "ログインボタン")
 
-        # --- ② 二要素認証（2FA） ---
+        # --- ② 二要素認証（2FA） (shalom_syncと完全一致) ---
         print("4. 二要素認証（2FA）画面の待機中...")
-        page.wait_for_timeout(5000)
+        page.wait_for_timeout(4000)
 
         totp = pyotp.TOTP(TOTP_SECRET)
         code = totp.now()
