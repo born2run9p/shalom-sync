@@ -159,13 +159,16 @@ def parse_csv_bytes_get_ag_columns(file_bytes):
 
 
 def update_worksheet_ag_columns(doc, gid, raw_matrix):
-    """指定GIDのシートの既存データをクリアし、A1からA〜G列データを上書き書き込み"""
+    """指定GIDのシートの A〜G 列のみを初期化（クリア）してからペースト（H列以降は保持）"""
     try:
         ws = doc.get_worksheet_by_id(gid)
         if not ws:
             raise ValueError(f"GID: {gid} のシートが見つかりません。")
         
-        ws.clear()
+        # A〜G列のみを範囲指定クリア（H列以降には影響を与えない）
+        ws.batch_clear(["A:G"])
+        
+        # クリア後、A1からデータを書き込み
         if raw_matrix:
             ws.update(range_name='A1', values=raw_matrix, value_input_option='USER_ENTERED')
         return True
@@ -342,7 +345,7 @@ def run():
         # 9. スプレッドシート（全従業員シート）へ書き込み
         print(f"\n7. スプレッドシート（全従業員 gid: {GID_ALL_EMPLOYEES}）を更新中...")
         if update_worksheet_ag_columns(doc_target, GID_ALL_EMPLOYEES, extracted_data):
-            print(f"★【成功】「全従業員」シートに {len(extracted_data)} 行のデータを正常に書き込みました！")
+            print(f"★【成功】「全従業員」シートの A〜G 列のみを初期化し、{len(extracted_data)} 行のデータを書き込みました（H列以降は保持）。")
 
         browser.close()
 
