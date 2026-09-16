@@ -1,11 +1,12 @@
 name: 社労夢全従業員データ取得
 
 on:
-  workflow_dispatch: # ← これがあることで手動実行ボタンが表示されます
+  workflow_dispatch: # 手動実行ボタン
 
 jobs:
   scrape:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted # ← 成功側と同じ環境に変更
+
     steps:
       - name: コードをチェックアウト
         uses: actions/checkout@v4
@@ -17,8 +18,9 @@ jobs:
 
       - name: 依存ライブラリのインストール
         run: |
-          pip install playwright pyotp gspread google-auth
-          playwright install --with-deps chromium
+          python -m pip install --upgrade pip
+          pip install pandas pyotp selenium gspread google-auth lxml
+          playwright install chromium
 
       - name: スクレイピングの実行
         env:
@@ -26,5 +28,6 @@ jobs:
           SHALOM_PASS: ${{ secrets.SHALOM_PASS }}
           TOTP_SECRET: ${{ secrets.TOTP_SECRET }}
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          TARGET_SPREADSHEET_KEY: ${{ secrets.TARGET_SPREADSHEET_KEY }}
         run: |
           python scrape_employees.py
