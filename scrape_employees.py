@@ -310,37 +310,38 @@ def run():
         click_button_element(page, btn_modal_confirm, "モーダル選択決定ボタン", timeout_sec=10)
         page.wait_for_timeout(2000)
 
-        # 7. 「出力」ボタンを押してダウンロード実行
+        # 7. 「出力」ボタンを押してダイアログを表示
         print("   --> 「出力」ボタンをクリック中...")
         btn_output = ["button:has-text('出力')", "button[value='出力']"]
-        
-        # expect_download のコンテキスト内でポップアップ操作を完結させる
-        with page.expect_download(timeout=120000) as download_info:
-            click_button_element(page, btn_output, "出力ボタン", timeout_sec=10)
-            
-            page.wait_for_timeout(2000)
-            print("   --> 「はい」ダイアログを確認中...")
-            btn_yes = ["#MsgBoxBtnYes", "button#MsgBoxBtnYes", "button:has-text('はい')"]
-            click_button_element(page, btn_yes, "はい(Y)ボタン", timeout_sec=10)
+        click_button_element(page, btn_output, "出力ボタン", timeout_sec=10)
+        page.wait_for_timeout(2000)
 
-            page.wait_for_timeout(2000)
-            print("   --> 「OK」ダイアログを確認中...")
-            btn_ok = ["#MsgBoxBtnOK", "button#MsgBoxBtnOK", "button:has-text('OK')"]
-            click_button_element(page, btn_ok, "OKボタン", timeout_sec=10)
+        # 8. 「はい」を押した瞬間に発生するダウンロードをキャッチ
+        print("   --> 「はい」ボタンをクリックして CSV ダウンロードを開始中...")
+        btn_yes = ["#MsgBoxBtnYes", "button#MsgBoxBtnYes", "button:has-text('はい')"]
+        
+        with page.expect_download(timeout=60000) as download_info:
+            click_button_element(page, btn_yes, "はい(Y)ボタン", timeout_sec=10)
 
         download = download_info.value
         print(f"   --> ファイルのダウンロードに成功しました: {download.suggested_filename}")
 
+        # 9. その後に表示される「OK」ポップアップを閉じる
+        page.wait_for_timeout(1000)
+        print("   --> 「OK」ダイアログを閉じています...")
+        btn_ok = ["#MsgBoxBtnOK", "button#MsgBoxBtnOK", "button:has-text('OK')"]
+        click_button_element(page, btn_ok, "OKボタン", timeout_sec=5)
+
+        # 10. ファイルの読み込みと解析
         download_path = download.path()
         with open(download_path, "rb") as f:
             file_bytes = f.read()
 
-        # 8. CSVから A列〜G列のデータを抽出
         print("   --> CSVデータを解析し、A〜G列のデータを抽出中...")
         extracted_data = parse_csv_bytes_get_ag_columns(file_bytes)
         print(f"   --> 抽出件数: {len(extracted_data)} 行")
 
-        # 9. スプレッドシート（全従業員シート）へ書き込み
+        # 11. スプレッドシート（全従業員シート）へ書き込み
         print(f"\n7. スプレッドシート（全従業員 gid: {GID_ALL_EMPLOYEES}）を更新中...")
         if update_worksheet_ag_columns(doc_target, GID_ALL_EMPLOYEES, extracted_data):
             print(f"★【成功】「全従業員」シートに {len(extracted_data)} 行のデータを正常に書き込みました！")
