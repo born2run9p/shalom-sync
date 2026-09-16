@@ -294,38 +294,32 @@ def run():
 
         # 4. 「選択」ボタン（DT0005WPersonOption_input4）を押す
         print("   --> 「選択」ボタンをクリック中...")
-        btn_select_selectors = [
-            "#DT0005WPersonOption_input4",
-            "button#DT0005WPersonOption_input4"
-        ]
-        click_button_element(page, btn_select_selectors, "事業所選択ボタン", timeout_sec=10)
+        btn_select_selector = "#DT0005WPersonOption_input4"
+        page.wait_for_selector(btn_select_selector, state="visible", timeout=10000)
+        page.locator(btn_select_selector).click(force=True)
         page.wait_for_timeout(3000)
 
-        # 5. ポップアップ（モーダル）が表示されるのを待機して「全選択」を押す
-        print("   --> モーダルダイアログの表示を待機中...")
-        modal_locator = page.locator(".modal-dialog, .modal-content, div[role='dialog']").last
-        modal_locator.wait_for(state="visible", timeout=10000)
-
+        # 5. モーダル内の「全選択」ボタン（#input3）が表示されるのを待機してクリック
         print("   --> モーダル内「全選択」をクリック中...")
-        btn_all_select = modal_locator.locator("#input3, button:has-text('全選択')").first
-        btn_all_select.click(force=True)
+        btn_all_select_selector = "button#input3, button:has-text('全選択')"
+        page.wait_for_selector(btn_all_select_selector, state="visible", timeout=15000)
+        page.locator(btn_all_select_selector).first.click(force=True)
         page.wait_for_timeout(2000)
 
-        # 6. モーダル内「選択」を押す
+        # 6. モーダル内「選択」ボタン（#input12）をクリック
         print("   --> モーダル内「選択」をクリック中...")
-        btn_modal_confirm = modal_locator.locator("#input12, button:has-text('選択')").first
-        btn_modal_confirm.click(force=True)
-        
-        # モーダルが閉じるのを待つ
+        btn_modal_confirm_selector = "button#input12"
+        page.wait_for_selector(btn_modal_confirm_selector, state="visible", timeout=10000)
+        page.locator(btn_modal_confirm_selector).first.click(force=True)
         page.wait_for_timeout(3000)
 
-        # 7. 「出力」ボタンを押すと同時に「はい」ダイアログ、「ダウンロード」を処理
+        # 7. 「出力」ボタンを押すと同時に「はい」ダイアログおよび「ダウンロード」を処理
         print("   --> 「出力」ボタンをクリック中...")
-        btn_output = ["button:has-text('出力')", "button[value='出力']"]
+        btn_output_selector = "button:has-text('出力')"
         
         download = None
         with page.expect_download(timeout=40000) as download_info:
-            click_button_element(page, btn_output, "出力ボタン", timeout_sec=10)
+            page.locator(btn_output_selector).first.click(force=True)
             page.wait_for_timeout(2000)
 
             # 「はい」ボタンが出たら押す
