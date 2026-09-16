@@ -49,7 +49,7 @@ def find_locator_in_page_or_frames(page, selectors):
     for selector in selectors:
         try:
             loc = page.locator(selector).first
-            if loc.count() > 0:
+            if loc.count() > 0 and loc.is_visible():
                 return loc
         except Exception:
             pass
@@ -57,7 +57,7 @@ def find_locator_in_page_or_frames(page, selectors):
         for frame in page.frames:
             try:
                 f_loc = frame.locator(selector).first
-                if f_loc.count() > 0:
+                if f_loc.count() > 0 and f_loc.is_visible():
                     return f_loc
             except Exception:
                 pass
@@ -65,13 +65,13 @@ def find_locator_in_page_or_frames(page, selectors):
 
 
 def fill_input_field(page, selectors, value, field_name="入力欄"):
-    """要素が存在するまで待機して値を入力"""
+    """要素が存在するまで待機して値を入力（1つ目のスクリプトと同一仕様）"""
     start_time = time.time()
-    while time.time() - start_time < 45:
+    while time.time() - start_time < 30:
         loc = find_locator_in_page_or_frames(page, selectors)
         if loc:
             try:
-                loc.scroll_into_view_if_needed()
+                loc.wait_for(state="visible", timeout=3000)
                 loc.click(force=True)
                 loc.fill("")
                 loc.type(value, delay=50)
@@ -203,15 +203,15 @@ def run():
             });
         """)
 
-        # --- ① ログイン処理 ---
+        # --- ① ログイン処理（1つ目のスクリプトと完全に同一の設定） ---
         login_url = "https://4ever.shalom-house.jp/login"
         print(f"URLにアクセス中: {login_url}")
-        page.goto(login_url, wait_until="domcontentloaded")
-        page.wait_for_timeout(5000)
+        page.goto(login_url, wait_until="load")
+        page.wait_for_timeout(3000)
 
         id_selectors = [
-            "#userId", "#id", "#loginId", "input[name='userId']", "input[name='id']",
-            "input[name='loginId']", "input[placeholder*='ID']", "input[placeholder*='ユーザー']",
+            "input[name='userId']", "input[name='id']", "input[name='loginId']",
+            "input[placeholder*='ID']", "input[placeholder*='ユーザー']",
             "input[type='text']", "input:not([type='password']):not([type='hidden'])"
         ]
         print(f"1. IDを入力中... ({SHALOM_ID})")
@@ -219,7 +219,7 @@ def run():
         page.wait_for_timeout(1000)
 
         pass_selectors = [
-            "#password", "#pass", "input[type='password']", "input[name='password']", "input[name='pass']"
+            "input[type='password']", "input[name='password']", "input[name='pass']"
         ]
         print("2. パスワードを入力中...")
         fill_input_field(page, pass_selectors, SHALOM_PASS, "パスワード入力欄")
@@ -227,14 +227,14 @@ def run():
 
         print("3. ログインボタンをクリックします...")
         login_btn_selectors = [
-            "#loginBtn", "button[type='submit']", "input[type='submit']",
+            "button[type='submit']", "input[type='submit']",
             "button:has-text('ログイン')", "input[value='ログイン']", "a:has-text('ログイン')"
         ]
         click_button_element(page, login_btn_selectors, "ログインボタン")
 
         # --- ② 二要素認証（2FA） ---
         print("4. 二要素認証（2FA）画面の待機中...")
-        page.wait_for_timeout(5000)
+        page.wait_for_timeout(4000)
 
         totp = pyotp.TOTP(TOTP_SECRET)
         code = totp.now()
