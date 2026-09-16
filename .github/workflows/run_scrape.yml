@@ -2,6 +2,15 @@ name: 社労夢全従業員データ取得
 
 on:
   workflow_dispatch: # 手動実行ボタン
+  schedule:
+    # 1) 午前 8:14 JST  -> 23:14 UTC (前日)
+    - cron: '14 23 * * *'
+    # 2) 正午 12:23 JST  -> 03:23 UTC
+    - cron: '23 3 * * *'
+    # 3) 17:07 JST      -> 08:07 UTC
+    - cron: '7 8 * * *'
+    # 4) 午前 0:42 JST  -> 15:42 UTC
+    - cron: '42 15 * * *'
 
 jobs:
   scrape:
