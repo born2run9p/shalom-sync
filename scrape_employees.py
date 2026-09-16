@@ -310,18 +310,21 @@ def run():
         click_button_element(page, btn_modal_confirm, "モーダル選択決定ボタン", timeout_sec=10)
         page.wait_for_timeout(2000)
 
-        # 7. 「出力」ボタンを押してダウンロード開始を待機
-        print("   --> 「出力」ボタンをクリックして CSV ダウンロードを実行中...")
+        # 7. 「出力」ボタンを押してダウンロード実行
+        print("   --> 「出力」ボタンをクリック中...")
         btn_output = ["button:has-text('出力')", "button[value='出力']"]
         
-        with page.expect_download(timeout=60000) as download_info:
+        # expect_download のコンテキスト内でポップアップ操作を完結させる
+        with page.expect_download(timeout=120000) as download_info:
             click_button_element(page, btn_output, "出力ボタン", timeout_sec=10)
             
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(2000)
+            print("   --> 「はい」ダイアログを確認中...")
             btn_yes = ["#MsgBoxBtnYes", "button#MsgBoxBtnYes", "button:has-text('はい')"]
             click_button_element(page, btn_yes, "はい(Y)ボタン", timeout_sec=10)
 
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(2000)
+            print("   --> 「OK」ダイアログを確認中...")
             btn_ok = ["#MsgBoxBtnOK", "button#MsgBoxBtnOK", "button:has-text('OK')"]
             click_button_element(page, btn_ok, "OKボタン", timeout_sec=10)
 
