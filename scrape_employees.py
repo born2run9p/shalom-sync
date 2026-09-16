@@ -49,7 +49,7 @@ def find_locator_in_page_or_frames(page, selectors):
     for selector in selectors:
         try:
             loc = page.locator(selector).first
-            if loc.count() > 0 and loc.is_visible():
+            if loc.count() > 0:
                 return loc
         except Exception:
             pass
@@ -57,7 +57,7 @@ def find_locator_in_page_or_frames(page, selectors):
         for frame in page.frames:
             try:
                 f_loc = frame.locator(selector).first
-                if f_loc.count() > 0 and f_loc.is_visible():
+                if f_loc.count() > 0:
                     return f_loc
             except Exception:
                 pass
@@ -67,11 +67,11 @@ def find_locator_in_page_or_frames(page, selectors):
 def fill_input_field(page, selectors, value, field_name="入力欄"):
     """要素が存在するまで待機して値を入力"""
     start_time = time.time()
-    while time.time() - start_time < 30:
+    while time.time() - start_time < 45:
         loc = find_locator_in_page_or_frames(page, selectors)
         if loc:
             try:
-                loc.wait_for(state="visible", timeout=3000)
+                loc.scroll_into_view_if_needed()
                 loc.click(force=True)
                 loc.fill("")
                 loc.type(value, delay=50)
@@ -112,13 +112,11 @@ def select_option_by_text_or_value(page, selectors, target_text, option_name="�
         if loc:
             try:
                 loc.scroll_into_view_if_needed()
-                # テキスト一致で選択を試みる
                 try:
                     loc.select_option(label=target_text, timeout=2000)
                     return True
                 except Exception:
                     pass
-                # テキスト含むoptionのvalueで選択
                 options = loc.locator("option").all()
                 for opt in options:
                     if target_text in opt.inner_text():
@@ -135,7 +133,6 @@ def select_option_by_text_or_value(page, selectors, target_text, option_name="�
 
 def parse_csv_bytes_get_ag_columns(file_bytes):
     """ダウンロードしたCSVバイナリを読み込み、A列〜G列（0〜6列目）を抽出する"""
-    # 一般的な文字コード（CP932/Shift_JIS または UTF-8）でデコード
     text_content = None
     for encoding in ['cp932', 'shift_jis', 'utf-8-sig', 'utf-8']:
         try:
@@ -152,9 +149,7 @@ def parse_csv_bytes_get_ag_columns(file_bytes):
     
     extracted_ag_rows = []
     for row in reader:
-        # 各行からA〜G列（最大7要素）をスライス取得
         ag_row = row[:7]
-        # 空行防止
         if any(c.strip() for c in ag_row):
             extracted_ag_rows.append(ag_row)
 
@@ -198,7 +193,7 @@ def run():
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             viewport={"width": 1280, "height": 800},
             ignore_https_errors=True,
-            accept_downloads=True  # ファイルダウンロードを許可
+            accept_downloads=True
         )
         page = context.new_page()
 
@@ -211,12 +206,12 @@ def run():
         # --- ① ログイン処理 ---
         login_url = "https://4ever.shalom-house.jp/login"
         print(f"URLにアクセス中: {login_url}")
-        page.goto(login_url, wait_until="load")
-        page.wait_for_timeout(3000)
+        page.goto(login_url, wait_until="domcontentloaded")
+        page.wait_for_timeout(5000)
 
         id_selectors = [
-            "input[name='userId']", "input[name='id']", "input[name='loginId']",
-            "input[placeholder*='ID']", "input[placeholder*='ユーザー']",
+            "#userId", "#id", "#loginId", "input[name='userId']", "input[name='id']",
+            "input[name='loginId']", "input[placeholder*='ID']", "input[placeholder*='ユーザー']",
             "input[type='text']", "input:not([type='password']):not([type='hidden'])"
         ]
         print(f"1. IDを入力中... ({SHALOM_ID})")
@@ -224,7 +219,7 @@ def run():
         page.wait_for_timeout(1000)
 
         pass_selectors = [
-            "input[type='password']", "input[name='password']", "input[name='pass']"
+            "#password", "#pass", "input[type='password']", "input[name='password']", "input[name='pass']"
         ]
         print("2. パスワードを入力中...")
         fill_input_field(page, pass_selectors, SHALOM_PASS, "パスワード入力欄")
@@ -232,14 +227,14 @@ def run():
 
         print("3. ログインボタンをクリックします...")
         login_btn_selectors = [
-            "button[type='submit']", "input[type='submit']",
+            "#loginBtn", "button[type='submit']", "input[type='submit']",
             "button:has-text('ログイン')", "input[value='ログイン']", "a:has-text('ログイン')"
         ]
         click_button_element(page, login_btn_selectors, "ログインボタン")
 
         # --- ② 二要素認証（2FA） ---
         print("4. 二要素認証（2FA）画面の待機中...")
-        page.wait_for_timeout(4000)
+        page.wait_for_timeout(5000)
 
         totp = pyotp.TOTP(TOTP_SECRET)
         code = totp.now()
@@ -276,7 +271,7 @@ def run():
         select_option_by_text_or_value(page, select_input1, "被保険者基本情報", "情報種別ドロップダウン")
         page.wait_for_timeout(2000)
 
-        # 2. 「全従業員」を選択 (input3 入力欄またはオートコンプリート)
+        # 2. 「全従業員」を選択
         print("   --> 「全従業員」を選択中...")
         input3_selectors = ["#input3", "input#input3"]
         fill_input_field(page, input3_selectors, "全従業員", "条件選択欄")
@@ -314,16 +309,13 @@ def run():
         print("   --> 「出力」ボタンをクリックして CSV ダウンロードを実行中...")
         btn_output = ["button:has-text('出力')", "button[value='出力']"]
         
-        # ダウンロードイベントを捕捉するためのセットアップ
         with page.expect_download(timeout=60000) as download_info:
             click_button_element(page, btn_output, "出力ボタン", timeout_sec=10)
             
-            # 「はい(Y)」ダイアログの対応
             page.wait_for_timeout(1000)
             btn_yes = ["#MsgBoxBtnYes", "button#MsgBoxBtnYes", "button:has-text('はい')"]
             click_button_element(page, btn_yes, "はい(Y)ボタン", timeout_sec=10)
 
-            # 「OK」ダイアログの対応
             page.wait_for_timeout(1000)
             btn_ok = ["#MsgBoxBtnOK", "button#MsgBoxBtnOK", "button:has-text('OK')"]
             click_button_element(page, btn_ok, "OKボタン", timeout_sec=10)
@@ -331,12 +323,11 @@ def run():
         download = download_info.value
         print(f"   --> ファイルのダウンロードに成功しました: {download.suggested_filename}")
 
-        # ダウンロードしたCSVをメモリ上に読み込み
         download_path = download.path()
         with open(download_path, "rb") as f:
             file_bytes = f.read()
 
-        # 8. CSVから A列〜G列（0〜6インデックス）のデータを抽出
+        # 8. CSVから A列〜G列のデータを抽出
         print("   --> CSVデータを解析し、A〜G列のデータを抽出中...")
         extracted_data = parse_csv_bytes_get_ag_columns(file_bytes)
         print(f"   --> 抽出件数: {len(extracted_data)} 行")
