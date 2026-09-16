@@ -87,7 +87,7 @@ def fill_input_field(page, selectors, value, field_name="入力欄"):
 
 
 def click_button_element(page, selectors, button_name="ボタン", timeout_sec=10):
-    """ボタン要素を検索してクリック (force=True / JS直叩き対応)"""
+    """ボタン要素を検索してクリック (force=True 対応)"""
     start_time = time.time()
     while time.time() - start_time < timeout_sec:
         loc = find_locator_in_page_or_frames(page, selectors)
@@ -103,18 +103,6 @@ def click_button_element(page, selectors, button_name="ボタン", timeout_sec=1
             except Exception:
                 pass
         page.wait_for_timeout(1000)
-    
-    # 標準ロケータで見つからない場合、JSで直接テキスト検索して強制クリック
-    try:
-        page.evaluate("""() => {
-            const btns = Array.from(document.querySelectorAll('button, input[type="button"], a'));
-            const target = btns.find(b => b.textContent.includes('はい') || b.value === 'はい');
-            if (target) target.click();
-        }""")
-        return True
-    except Exception:
-        pass
-
     return False
 
 
@@ -302,66 +290,53 @@ def run():
             "label:has-text('複数事業所指定') input"
         ]
         click_button_element(page, rdo_multi, "複数事業所指定ラジオボタン", timeout_sec=10)
-        page.wait_for_timeout(1000)
+        page.wait_for_timeout(1500)
 
-        # 4. 「選択」ボタンを押す
+        # 4. 「選択」ボタン（DT0005WPersonOption_input4）を押す
         print("   --> 「選択」ボタンをクリック中...")
-        btn_select = ["#DT0005WPersonOption_input4", "button#DT0005WPersonOption_input4", "button:has-text('選択')"]
-        click_button_element(page, btn_select, "事業所選択ボタン", timeout_sec=10)
+        btn_select_selectors = [
+            "#DT0005WPersonOption_input4",
+            "button#DT0005WPersonOption_input4"
+        ]
+        click_button_element(page, btn_select_selectors, "事業所選択ボタン", timeout_sec=10)
         page.wait_for_timeout(3000)
 
-        # 5. ポップアップの「全選択」を押す
+        # 5. ポップアップ（モーダル）が表示されるのを待機して「全選択」を押す
+        print("   --> モーダルダイアログの表示を待機中...")
+        modal_locator = page.locator(".modal-dialog, .modal-content, div[role='dialog']").last
+        modal_locator.wait_for(state="visible", timeout=10000)
+
         print("   --> モーダル内「全選択」をクリック中...")
-        btn_all_select = ["#input3", "button#input3", "button:has-text('全選択')"]
-        click_button_element(page, btn_all_select, "全選択ボタン", timeout_sec=10)
-        page.wait_for_timeout(1500)
+        btn_all_select = modal_locator.locator("#input3, button:has-text('全選択')").first
+        btn_all_select.click(force=True)
+        page.wait_for_timeout(2000)
 
         # 6. モーダル内「選択」を押す
         print("   --> モーダル内「選択」をクリック中...")
-        btn_modal_confirm = ["#input12", "button#input12", "button:has-text('選択')"]
-        click_button_element(page, btn_modal_confirm, "モーダル選択決定ボタン", timeout_sec=10)
-        page.wait_for_timeout(2000)
+        btn_modal_confirm = modal_locator.locator("#input12, button:has-text('選択')").first
+        btn_modal_confirm.click(force=True)
+        
+        # モーダルが閉じるのを待つ
+        page.wait_for_timeout(3000)
 
-        # 7. 「出力」ボタンを押す
+        # 7. 「出力」ボタンを押すと同時に「はい」ダイアログ、「ダウンロード」を処理
         print("   --> 「出力」ボタンをクリック中...")
         btn_output = ["button:has-text('出力')", "button[value='出力']"]
-        click_button_element(page, btn_output, "出力ボタン", timeout_sec=10)
-        page.wait_for_timeout(2000)
-
-        # 8. 「はい」のクリックと同時にダウンロードを捕捉
-        print("   --> 「はい」クリック直後のダウンロード捕捉を開始...")
-        btn_yes_selectors = [
-            "#MsgBoxBtnYes",
-            "button#MsgBoxBtnYes",
-            "button:has-text('はい')",
-            "input[value='はい']",
-            "a:has-text('はい')"
-        ]
-
+        
         download = None
-        try:
-            with page.expect_download(timeout=40000) as download_info:
-                print("   --> 「はい」ボタンをクリックしています...")
-                # 強制クリック & JSクリックで確実に「はい」を押し込む
-                clicked = click_button_element(page, btn_yes_selectors, "はいボタン", timeout_sec=10)
-                if not clicked:
-                    print("   --> ロケーターで押せなかったため、JS経由で「はい」をクリックします...")
-                    page.evaluate("""() => {
-                        const btns = Array.from(document.querySelectorAll('button, input, a'));
-                        const target = btns.find(b => (b.textContent && b.textContent.includes('はい')) || b.value === 'はい');
-                        if (target) target.click();
-                    }""")
+        with page.expect_download(timeout=40000) as download_info:
+            click_button_element(page, btn_output, "出力ボタン", timeout_sec=10)
+            page.wait_for_timeout(2000)
 
-            download = download_info.value
-            print(f"   --> ダウンロード完了: {download.suggested_filename}")
+            # 「はい」ボタンが出たら押す
+            print("   --> 「はい」ボタンをクリック中...")
+            btn_yes_selectors = ["#MsgBoxBtnYes", "button#MsgBoxBtnYes", "button:has-text('はい')"]
+            click_button_element(page, btn_yes_selectors, "はいボタン", timeout_sec=10)
 
-        except Exception as e:
-            print(f"[ERROR] 「はい」クリック後のダウンロード捕捉に失敗しました: {e}")
-            page.screenshot(path="download_error.png")
-            print("   --> デバッグ用画面キャプチャ 'download_error.png' を保存しました。")
-            raise e
+        download = download_info.value
+        print(f"   --> ダウンロード完了: {download.suggested_filename}")
 
-        # 9. ファイルの読み込みと解析
+        # 8. ファイルの読み込みと解析
         download_path = download.path()
         with open(download_path, "rb") as f:
             file_bytes = f.read()
@@ -370,7 +345,7 @@ def run():
         extracted_data = parse_csv_bytes_get_ag_columns(file_bytes)
         print(f"   --> 抽出件数: {len(extracted_data)} 行")
 
-        # 10. スプレッドシート（全従業員シート）へ書き込み
+        # 9. スプレッドシート（全従業員シート）へ書き込み
         print(f"\n7. スプレッドシート（全従業員 gid: {GID_ALL_EMPLOYEES}）を更新中...")
         if update_worksheet_ag_columns(doc_target, GID_ALL_EMPLOYEES, extracted_data):
             print(f"★【成功】「全従業員」シートに {len(extracted_data)} 行のデータを正常に書き込みました！")
