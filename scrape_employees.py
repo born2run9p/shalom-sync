@@ -10,28 +10,21 @@ import gspread
 from google.oauth2.service_account import Credentials
 from playwright.sync_api import sync_playwright
 
-# Windows環境でのログ文字化け防止
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
-# ==========================================
-# 環境変数からの設定値取得
-# ==========================================
 SHALOM_ID = os.environ.get("SHALOM_ID", "145371-01")
 SHALOM_PASS = os.environ.get("SHALOM_PASS")
 TOTP_SECRET = os.environ.get("TOTP_SECRET")
 GCP_SA_KEY = os.environ.get("GCP_SA_KEY")
 
-# 書き込み先スプレッドシートIDおよびシート名/GID
 SPREADSHEET_KEY_TARGET = "14ykRH_2i39InbR3iBvUaYOClEcE0WZJ1NVeBXC1Ekmk"
-GID_ALL_EMPLOYEES = 201499241  # 「全従業員」シートのGID
+GID_ALL_EMPLOYEES = 201499241
 
-# URL定義
 URL_DT0005W = "https://4ever.shalom-house.jp/DT0005W"
 
 
 def get_gspread_client():
-    """GCP Service Account Key から gspread クライアントを初期化"""
     if not GCP_SA_KEY:
         raise ValueError("[ERROR] GCP_SA_KEY 環境変数が設定されていません。")
     
@@ -45,7 +38,6 @@ def get_gspread_client():
 
 
 def find_locator_in_page_or_frames(page, selectors):
-    """メインページおよびすべてのiframe内から対象ロケータを探索"""
     for selector in selectors:
         try:
             loc = page.locator(selector).first
@@ -65,7 +57,6 @@ def find_locator_in_page_or_frames(page, selectors):
 
 
 def fill_input_field(page, selectors, value, field_name="入力欄"):
-    """要素が存在するまで待機して値を入力（1つ目のスクリプトと同一仕様）"""
     start_time = time.time()
     while time.time() - start_time < 30:
         loc = find_locator_in_page_or_frames(page, selectors)
@@ -80,12 +71,11 @@ def fill_input_field(page, selectors, value, field_name="入力欄"):
                 pass
         page.wait_for_timeout(1000)
     
-    print(f"[ERROR] {field_name} が見つかりませんでした。")
+    print(f"[ERROR] {field_name} が見つかりませんでした。(現在のURL: {page.url})")
     raise TimeoutError(f"{field_name} の取得に失敗しました。")
 
 
 def click_button_element(page, selectors, button_name="ボタン", timeout_sec=10):
-    """ボタン要素を検索してクリック (force=True 対応)"""
     start_time = time.time()
     while time.time() - start_time < timeout_sec:
         loc = find_locator_in_page_or_frames(page, selectors)
@@ -105,7 +95,6 @@ def click_button_element(page, selectors, button_name="ボタン", timeout_sec=1
 
 
 def select_option_by_text_or_value(page, selectors, target_text, option_name="ドロップダウン"):
-    """ドロップダウンメニューからテキストまたは値で要素を選択"""
     start_time = time.time()
     while time.time() - start_time < 15:
         loc = find_locator_in_page_or_frames(page, selectors)
@@ -132,7 +121,6 @@ def select_option_by_text_or_value(page, selectors, target_text, option_name="�
 
 
 def parse_csv_bytes_get_ag_columns(file_bytes):
-    """ダウンロードしたCSVバイナリを読み込み、A列〜G列（0〜6列目）を抽出する"""
     text_content = None
     for encoding in ['cp932', 'shift_jis', 'utf-8-sig', 'utf-8']:
         try:
@@ -157,7 +145,6 @@ def parse_csv_bytes_get_ag_columns(file_bytes):
 
 
 def update_worksheet_ag_columns(doc, gid, raw_matrix):
-    """指定GIDのシートの既存データをクリアし、A1からA〜G列データを上書き書き込み"""
     try:
         ws = doc.get_worksheet_by_id(gid)
         if not ws:
@@ -203,7 +190,6 @@ def run():
             });
         """)
 
-        # --- ① ログイン処理（1つ目のスクリプトと完全に同一の設定） ---
         login_url = "https://4ever.shalom-house.jp/login"
         print(f"URLにアクセス中: {login_url}")
         page.goto(login_url, wait_until="load")
@@ -232,7 +218,6 @@ def run():
         ]
         click_button_element(page, login_btn_selectors, "ログインボタン")
 
-        # --- ② 二要素認証（2FA） ---
         print("4. 二要素認証（2FA）画面の待機中...")
         page.wait_for_timeout(4000)
 
@@ -259,25 +244,21 @@ def run():
         except Exception as e:
             print(f"   --> 2FA画面をスキップまたは処理成功: {e}")
 
-        # --- ③ DT0005W 画面への移動と操作 ---
         print("\n6. 目的ページ（DT0005W）へ移動中...")
         page.wait_for_timeout(5000)
         page.goto(URL_DT0005W, wait_until="networkidle")
         page.wait_for_timeout(5000)
 
-        # 1. 「被保険者基本情報」を選択
         print("   --> 「被保険者基本情報」を選択中...")
         select_input1 = ["#input1", "select#input1"]
         select_option_by_text_or_value(page, select_input1, "被保険者基本情報", "情報種別ドロップダウン")
         page.wait_for_timeout(2000)
 
-        # 2. 「全従業員」を選択
         print("   --> 「全従業員」を選択中...")
         input3_selectors = ["#input3", "input#input3"]
         fill_input_field(page, input3_selectors, "全従業員", "条件選択欄")
         page.wait_for_timeout(1500)
 
-        # 3. 「複数事業所指定」ラジオボタンを選択
         print("   --> 「複数事業所指定」ラジオボタンを選択中...")
         rdo_multi = [
             "#DT0005WPersonOption_rdoMultiCompany",
@@ -287,25 +268,21 @@ def run():
         click_button_element(page, rdo_multi, "複数事業所指定ラジオボタン", timeout_sec=10)
         page.wait_for_timeout(1000)
 
-        # 4. 「選択」ボタンを押す
         print("   --> 「選択」ボタンをクリック中...")
         btn_select = ["#DT0005WPersonOption_input4", "button#DT0005WPersonOption_input4", "button:has-text('選択')"]
         click_button_element(page, btn_select, "事業所選択ボタン", timeout_sec=10)
         page.wait_for_timeout(3000)
 
-        # 5. ポップアップの「全選択」を押す
         print("   --> モーダル内「全選択」をクリック中...")
         btn_all_select = ["#input3", "button#input3", "button:has-text('全選択')"]
         click_button_element(page, btn_all_select, "全選択ボタン", timeout_sec=10)
         page.wait_for_timeout(1500)
 
-        # 6. モーダル内「選択」を押す
         print("   --> モーダル内「選択」をクリック中...")
         btn_modal_confirm = ["#input12", "button#input12", "button:has-text('選択')"]
         click_button_element(page, btn_modal_confirm, "モーダル選択決定ボタン", timeout_sec=10)
         page.wait_for_timeout(2000)
 
-        # 7. 「出力」ボタンを押してダウンロード開始を待機
         print("   --> 「出力」ボタンをクリックして CSV ダウンロードを実行中...")
         btn_output = ["button:has-text('出力')", "button[value='出力']"]
         
@@ -327,12 +304,10 @@ def run():
         with open(download_path, "rb") as f:
             file_bytes = f.read()
 
-        # 8. CSVから A列〜G列のデータを抽出
         print("   --> CSVデータを解析し、A〜G列のデータを抽出中...")
         extracted_data = parse_csv_bytes_get_ag_columns(file_bytes)
         print(f"   --> 抽出件数: {len(extracted_data)} 行")
 
-        # 9. スプレッドシート（全従業員シート）へ書き込み
         print(f"\n7. スプレッドシート（全従業員 gid: {GID_ALL_EMPLOYEES}）を更新中...")
         if update_worksheet_ag_columns(doc_target, GID_ALL_EMPLOYEES, extracted_data):
             print(f"★【成功】「全従業員」シートに {len(extracted_data)} 行のデータを正常に書き込みました！")
