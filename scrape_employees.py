@@ -22,9 +22,11 @@ SHALOM_PASS = os.environ.get("SHALOM_PASS")
 TOTP_SECRET = os.environ.get("TOTP_SECRET")
 GCP_SA_KEY = os.environ.get("GCP_SA_KEY")
 
-# 書き込み先スプレッドシートIDおよびシート名/GID
+# スプレッドシートID（書き込み対象）
 SPREADSHEET_KEY_TARGET = "14ykRH_2i39InbR3iBvUaYOClEcE0WZJ1NVeBXC1Ekmk"
-GID_ALL_EMPLOYEES = 201499241  # 「全従業員」シートのGID
+
+# シートGID定義
+GID_ALL_EMPLOYEES = 201499241
 
 # URL定義
 URL_DT0005W = "https://4ever.shalom-house.jp/DT0005W"
@@ -45,7 +47,7 @@ def get_gspread_client():
 
 
 def find_locator_in_page_or_frames(page, selectors):
-    """メインページおよびすべてのiframe内から対象ロケータを探索 (shalom_syncと同一)"""
+    """メインページおよびすべてのiframe内から対象ロケータを探索"""
     for selector in selectors:
         try:
             loc = page.locator(selector).first
@@ -65,7 +67,7 @@ def find_locator_in_page_or_frames(page, selectors):
 
 
 def fill_input_field(page, selectors, value, field_name="入力欄"):
-    """要素が存在するまで待機して値を入力 (shalom_syncと同一)"""
+    """要素が存在するまで待機して値を入力"""
     start_time = time.time()
     while time.time() - start_time < 30:
         loc = find_locator_in_page_or_frames(page, selectors)
@@ -85,7 +87,7 @@ def fill_input_field(page, selectors, value, field_name="入力欄"):
 
 
 def click_button_element(page, selectors, button_name="ボタン", timeout_sec=10):
-    """ボタン要素を検索してクリック (shalom_syncと同一)"""
+    """ボタン要素を検索してクリック (force=True 対応)"""
     start_time = time.time()
     while time.time() - start_time < timeout_sec:
         loc = find_locator_in_page_or_frames(page, selectors)
@@ -203,7 +205,7 @@ def run():
             });
         """)
 
-        # --- ① ログイン画面を開く (shalom_syncと完全一致) ---
+        # --- ① ログイン画面を開く ---
         login_url = "https://4ever.shalom-house.jp/login"
         print(f"URLにアクセス中: {login_url}")
         page.goto(login_url, wait_until="load")
@@ -235,7 +237,7 @@ def run():
         ]
         click_button_element(page, login_btn_selectors, "ログインボタン")
 
-        # --- ② 二要素認証（2FA） (shalom_syncと完全一致) ---
+        # --- ② 二要素認証（2FA） ---
         print("4. 二要素認証（2FA）画面の待機中...")
         page.wait_for_timeout(4000)
 
