@@ -13,14 +13,19 @@ from playwright.sync_api import sync_playwright
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
+# ==========================================
+# 環境変数からの設定値取得
+# ==========================================
 SHALOM_ID = os.environ.get("SHALOM_ID", "145371-01")
 SHALOM_PASS = os.environ.get("SHALOM_PASS")
 TOTP_SECRET = os.environ.get("TOTP_SECRET")
 GCP_SA_KEY = os.environ.get("GCP_SA_KEY")
 
+# 書き込み先スプレッドシートIDおよびシート名/GID
 SPREADSHEET_KEY_TARGET = "14ykRH_2i39InbR3iBvUaYOClEcE0WZJ1NVeBXC1Ekmk"
-GID_ALL_EMPLOYEES = 201499241
+GID_ALL_EMPLOYEES = 201499241  # 「全従業員」シートのGID
 
+# URL定義
 URL_DT0005W = "https://4ever.shalom-house.jp/DT0005W"
 
 
@@ -37,11 +42,72 @@ def get_gspread_client():
     return gspread.authorize(creds)
 
 
+def find_input_in_page_or_frames(page, is_password=False):
+    """メインページおよびすべてのiframe内から入力欄を広域探索"""
+    input_type = "password" if is_password else "text"
+    
+    # 1. ページ本体から探索
+    inputs = page.locator("input").all()
+    for inp in inputs:
+        try:
+            p_type = inp.get_attribute("type") or "text"
+            p_name = inp.get_attribute("name") or ""
+            p_id = inp.get_attribute("id") or ""
+            
+            if is_password:
+                if p_type == "password" or "pass" in p_name.lower() or "pass" in p_id.lower():
+                    return inp
+            else:
+                if p_type in ["text", "email", "tel", ""] and p_type != "hidden" and p_type != "password":
+                    return inp
+        except Exception:
+            pass
+
+    # 2. iframe 内から探索
+    for frame in page.frames:
+        f_inputs = frame.locator("input").all()
+        for inp in f_inputs:
+            try:
+                p_type = inp.get_attribute("type") or "text"
+                p_name = inp.get_attribute("name") or ""
+                p_id = inp.get_attribute("id") or ""
+                
+                if is_password:
+                    if p_type == "password" or "pass" in p_name.lower() or "pass" in p_id.lower():
+                        return inp
+                else:
+                    if p_type in ["text", "email", "tel", ""] and p_type != "hidden" and p_type != "password":
+                        return inp
+            except Exception:
+                pass
+    return None
+
+
+def fill_login_field(page, value, is_password=False, field_name="入力欄"):
+    """ログイン入力欄を可視化待機して入力"""
+    start_time = time.time()
+    while time.time() - start_time < 30:
+        loc = find_input_in_page_or_frames(page, is_password=is_password)
+        if loc:
+            try:
+                loc.scroll_into_view_if_needed()
+                loc.click(force=True)
+                loc.fill("")
+                loc.type(value, delay=50)
+                return True
+            except Exception:
+                pass
+        page.wait_for_timeout(1000)
+    
+    print(f"[ERROR] {field_name} が見つかりませんでした。(現在のURL: {page.url})")
+    raise TimeoutError(f"{field_name} の取得に失敗しました。")
+
+
 def find_locator_in_page_or_frames(page, selectors):
     for selector in selectors:
         try:
             loc = page.locator(selector).first
-            if loc.count() > 0 and loc.is_visible():
+            if loc.count() > 0:
                 return loc
         except Exception:
             pass
@@ -49,7 +115,7 @@ def find_locator_in_page_or_frames(page, selectors):
         for frame in page.frames:
             try:
                 f_loc = frame.locator(selector).first
-                if f_loc.count() > 0 and f_loc.is_visible():
+                if f_loc.count() > 0:
                     return f_loc
             except Exception:
                 pass
@@ -62,7 +128,7 @@ def fill_input_field(page, selectors, value, field_name="入力欄"):
         loc = find_locator_in_page_or_frames(page, selectors)
         if loc:
             try:
-                loc.wait_for(state="visible", timeout=3000)
+                loc.scroll_into_view_if_needed()
                 loc.click(force=True)
                 loc.fill("")
                 loc.type(value, delay=50)
@@ -190,25 +256,18 @@ def run():
             });
         """)
 
+        # --- ① ログイン処理 ---
         login_url = "https://4ever.shalom-house.jp/login"
         print(f"URLにアクセス中: {login_url}")
-        page.goto(login_url, wait_until="load")
-        page.wait_for_timeout(3000)
+        page.goto(login_url, wait_until="networkidle")
+        page.wait_for_timeout(5000)
 
-        id_selectors = [
-            "input[name='userId']", "input[name='id']", "input[name='loginId']",
-            "input[placeholder*='ID']", "input[placeholder*='ユーザー']",
-            "input[type='text']", "input:not([type='password']):not([type='hidden'])"
-        ]
         print(f"1. IDを入力中... ({SHALOM_ID})")
-        fill_input_field(page, id_selectors, SHALOM_ID, "ID入力欄")
+        fill_login_field(page, SHALOM_ID, is_password=False, field_name="ID入力欄")
         page.wait_for_timeout(1000)
 
-        pass_selectors = [
-            "input[type='password']", "input[name='password']", "input[name='pass']"
-        ]
         print("2. パスワードを入力中...")
-        fill_input_field(page, pass_selectors, SHALOM_PASS, "パスワード入力欄")
+        fill_login_field(page, SHALOM_PASS, is_password=True, field_name="パスワード入力欄")
         page.wait_for_timeout(1000)
 
         print("3. ログインボタンをクリックします...")
@@ -218,8 +277,9 @@ def run():
         ]
         click_button_element(page, login_btn_selectors, "ログインボタン")
 
+        # --- ② 二要素認証（2FA） ---
         print("4. 二要素認証（2FA）画面の待機中...")
-        page.wait_for_timeout(4000)
+        page.wait_for_timeout(5000)
 
         totp = pyotp.TOTP(TOTP_SECRET)
         code = totp.now()
@@ -244,21 +304,25 @@ def run():
         except Exception as e:
             print(f"   --> 2FA画面をスキップまたは処理成功: {e}")
 
+        # --- ③ DT0005W 画面への移動と操作 ---
         print("\n6. 目的ページ（DT0005W）へ移動中...")
         page.wait_for_timeout(5000)
         page.goto(URL_DT0005W, wait_until="networkidle")
         page.wait_for_timeout(5000)
 
+        # 1. 「被保険者基本情報」を選択
         print("   --> 「被保険者基本情報」を選択中...")
         select_input1 = ["#input1", "select#input1"]
         select_option_by_text_or_value(page, select_input1, "被保険者基本情報", "情報種別ドロップダウン")
         page.wait_for_timeout(2000)
 
+        # 2. 「全従業員」を選択
         print("   --> 「全従業員」を選択中...")
         input3_selectors = ["#input3", "input#input3"]
         fill_input_field(page, input3_selectors, "全従業員", "条件選択欄")
         page.wait_for_timeout(1500)
 
+        # 3. 「複数事業所指定」ラジオボタンを選択
         print("   --> 「複数事業所指定」ラジオボタンを選択中...")
         rdo_multi = [
             "#DT0005WPersonOption_rdoMultiCompany",
@@ -268,21 +332,25 @@ def run():
         click_button_element(page, rdo_multi, "複数事業所指定ラジオボタン", timeout_sec=10)
         page.wait_for_timeout(1000)
 
+        # 4. 「選択」ボタンを押す
         print("   --> 「選択」ボタンをクリック中...")
         btn_select = ["#DT0005WPersonOption_input4", "button#DT0005WPersonOption_input4", "button:has-text('選択')"]
         click_button_element(page, btn_select, "事業所選択ボタン", timeout_sec=10)
         page.wait_for_timeout(3000)
 
+        # 5. ポップアップの「全選択」を押す
         print("   --> モーダル内「全選択」をクリック中...")
         btn_all_select = ["#input3", "button#input3", "button:has-text('全選択')"]
         click_button_element(page, btn_all_select, "全選択ボタン", timeout_sec=10)
         page.wait_for_timeout(1500)
 
+        # 6. モーダル内「選択」を押す
         print("   --> モーダル内「選択」をクリック中...")
         btn_modal_confirm = ["#input12", "button#input12", "button:has-text('選択')"]
         click_button_element(page, btn_modal_confirm, "モーダル選択決定ボタン", timeout_sec=10)
         page.wait_for_timeout(2000)
 
+        # 7. 「出力」ボタンを押してダウンロード開始を待機
         print("   --> 「出力」ボタンをクリックして CSV ダウンロードを実行中...")
         btn_output = ["button:has-text('出力')", "button[value='出力']"]
         
@@ -304,10 +372,12 @@ def run():
         with open(download_path, "rb") as f:
             file_bytes = f.read()
 
+        # 8. CSVから A列〜G列のデータを抽出
         print("   --> CSVデータを解析し、A〜G列のデータを抽出中...")
         extracted_data = parse_csv_bytes_get_ag_columns(file_bytes)
         print(f"   --> 抽出件数: {len(extracted_data)} 行")
 
+        # 9. スプレッドシート（全従業員シート）へ書き込み
         print(f"\n7. スプレッドシート（全従業員 gid: {GID_ALL_EMPLOYEES}）を更新中...")
         if update_worksheet_ag_columns(doc_target, GID_ALL_EMPLOYEES, extracted_data):
             print(f"★【成功】「全従業員」シートに {len(extracted_data)} 行のデータを正常に書き込みました！")
