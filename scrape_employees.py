@@ -316,45 +316,49 @@ def run():
         click_button_element(page, btn_output, "出力ボタン", timeout_sec=10)
         page.wait_for_timeout(2000)
 
-        # 8. 「はい」〜「OK」の一括操作フローでダウンロードをキャッチ
-        print("   --> ダウンロード処理の捕捉を開始中...")
+        # 8. 「はい」〜「OK」操作のレスポンスをキャッチ
+        print("   --> CSVレスポンス（ダウンロード通信）のキャッチ準備中...")
         btn_yes = ["#MsgBoxBtnYes", "button#MsgBoxBtnYes", "button:has-text('はい')"]
         btn_ok = ["#MsgBoxBtnOK", "button#MsgBoxBtnOK", "button:has-text('OK')"]
 
-        download = None
+        captured_file_bytes = None
         
-        # expect_download の範囲を 「はい」から「OK」まで広げて待機
+        # expect_download に依存せず、ネットワーク通信(expect_response)をキャッチする
+        def is_csv_response(response):
+            headers = response.headers
+            content_type = headers.get("content-type", "").lower()
+            content_disposition = headers.get("content-disposition", "").lower()
+            return "csv" in content_type or "attachment" in content_disposition or "octet-stream" in content_type
+
         try:
-            with page.expect_download(timeout=40000) as download_info:
+            with page.expect_response(is_csv_response, timeout=40000) as resp_info:
                 print("   --> 「はい」ボタンをクリック中...")
                 click_button_element(page, btn_yes, "はい(Y)ボタン", timeout_sec=10)
                 page.wait_for_timeout(2000)
-                
-                print("   --> 「OK」ダイアログを確認してクリック中...")
+
+                print("   --> 「OK」ダイアログをクリック中...")
                 click_button_element(page, btn_ok, "OKボタン", timeout_sec=10)
 
-            download = download_info.value
-        except Exception as e:
-            print(f"   --> [警告] 標準の expect_download でキャッチできませんでした: {e}")
-            print("   --> 追加のダウンロード待機を試行中...")
-            
-            # もし「OK」を押した後に少し遅れて発生する場合のリトライ
+            resp = resp_info.value
+            captured_file_bytes = resp.body()
+            print("   --> ネットワーク通信から CSV データの直接取得に成功しました！")
+
+        except Exception as net_err:
+            print(f"   --> [レスポンスキャッチ不成立] {net_err}")
+            print("   --> expect_download による最終リトライを実施中...")
             try:
                 with page.expect_download(timeout=30000) as download_info:
-                    click_button_element(page, btn_ok, "OKボタン(リトライ)", timeout_sec=5)
+                    click_button_element(page, btn_ok, "OKボタン(再押下)", timeout_sec=5)
                 download = download_info.value
-            except Exception as e2:
-                raise RuntimeError(f"ダウンロードの取得に最終失敗しました: {e2}")
+                download_path = download.path()
+                with open(download_path, "rb") as f:
+                    captured_file_bytes = f.read()
+            except Exception as e_final:
+                raise RuntimeError(f"データの取得に最終失敗しました: {e_final}")
 
-        print(f"   --> ファイルのダウンロードに成功しました: {download.suggested_filename}")
-
-        # 9. ファイルの読み込みと解析
-        download_path = download.path()
-        with open(download_path, "rb") as f:
-            file_bytes = f.read()
-
+        # 9. CSVデータの解析
         print("   --> CSVデータを解析し、A〜G列のデータを抽出中...")
-        extracted_data = parse_csv_bytes_get_ag_columns(file_bytes)
+        extracted_data = parse_csv_bytes_get_ag_columns(captured_file_bytes)
         print(f"   --> 抽出件数: {len(extracted_data)} 行")
 
         # 10. スプレッドシート（全従業員シート）へ書き込み
