@@ -87,7 +87,7 @@ def fill_input_field(page, selectors, value, field_name="入力欄"):
 
 
 def click_button_element(page, selectors, button_name="ボタン", timeout_sec=10):
-    """ボタン要素を検索してクリック (force=True 対応)"""
+    """ボタン要素を検索してクリック (force=True / JS直叩き対応)"""
     start_time = time.time()
     while time.time() - start_time < timeout_sec:
         loc = find_locator_in_page_or_frames(page, selectors)
@@ -103,6 +103,18 @@ def click_button_element(page, selectors, button_name="ボタン", timeout_sec=1
             except Exception:
                 pass
         page.wait_for_timeout(1000)
+    
+    # 標準ロケータで見つからない場合、JSで直接テキスト検索して強制クリック
+    try:
+        page.evaluate("""() => {
+            const btns = Array.from(document.querySelectorAll('button, input[type="button"], a'));
+            const target = btns.find(b => b.textContent.includes('はい') || b.value === 'はい');
+            if (target) target.click();
+        }""")
+        return True
+    except Exception:
+        pass
+
     return False
 
 
@@ -316,49 +328,46 @@ def run():
         click_button_element(page, btn_output, "出力ボタン", timeout_sec=10)
         page.wait_for_timeout(2000)
 
-        # 8. 「はい」〜「OK」操作のレスポンスをキャッチ
-        print("   --> CSVレスポンス（ダウンロード通信）のキャッチ準備中...")
-        btn_yes = ["#MsgBoxBtnYes", "button#MsgBoxBtnYes", "button:has-text('はい')"]
-        btn_ok = ["#MsgBoxBtnOK", "button#MsgBoxBtnOK", "button:has-text('OK')"]
+        # 8. 「はい」のクリックと同時にダウンロードを捕捉
+        print("   --> 「はい」クリック直後のダウンロード捕捉を開始...")
+        btn_yes_selectors = [
+            "#MsgBoxBtnYes",
+            "button#MsgBoxBtnYes",
+            "button:has-text('はい')",
+            "input[value='はい']",
+            "a:has-text('はい')"
+        ]
 
-        captured_file_bytes = None
-        
-        # expect_download に依存せず、ネットワーク通信(expect_response)をキャッチする
-        def is_csv_response(response):
-            headers = response.headers
-            content_type = headers.get("content-type", "").lower()
-            content_disposition = headers.get("content-disposition", "").lower()
-            return "csv" in content_type or "attachment" in content_disposition or "octet-stream" in content_type
-
+        download = None
         try:
-            with page.expect_response(is_csv_response, timeout=40000) as resp_info:
-                print("   --> 「はい」ボタンをクリック中...")
-                click_button_element(page, btn_yes, "はい(Y)ボタン", timeout_sec=10)
-                page.wait_for_timeout(2000)
+            with page.expect_download(timeout=40000) as download_info:
+                print("   --> 「はい」ボタンをクリックしています...")
+                # 強制クリック & JSクリックで確実に「はい」を押し込む
+                clicked = click_button_element(page, btn_yes_selectors, "はいボタン", timeout_sec=10)
+                if not clicked:
+                    print("   --> ロケーターで押せなかったため、JS経由で「はい」をクリックします...")
+                    page.evaluate("""() => {
+                        const btns = Array.from(document.querySelectorAll('button, input, a'));
+                        const target = btns.find(b => (b.textContent && b.textContent.includes('はい')) || b.value === 'はい');
+                        if (target) target.click();
+                    }""")
 
-                print("   --> 「OK」ダイアログをクリック中...")
-                click_button_element(page, btn_ok, "OKボタン", timeout_sec=10)
+            download = download_info.value
+            print(f"   --> ダウンロード完了: {download.suggested_filename}")
 
-            resp = resp_info.value
-            captured_file_bytes = resp.body()
-            print("   --> ネットワーク通信から CSV データの直接取得に成功しました！")
+        except Exception as e:
+            print(f"[ERROR] 「はい」クリック後のダウンロード捕捉に失敗しました: {e}")
+            page.screenshot(path="download_error.png")
+            print("   --> デバッグ用画面キャプチャ 'download_error.png' を保存しました。")
+            raise e
 
-        except Exception as net_err:
-            print(f"   --> [レスポンスキャッチ不成立] {net_err}")
-            print("   --> expect_download による最終リトライを実施中...")
-            try:
-                with page.expect_download(timeout=30000) as download_info:
-                    click_button_element(page, btn_ok, "OKボタン(再押下)", timeout_sec=5)
-                download = download_info.value
-                download_path = download.path()
-                with open(download_path, "rb") as f:
-                    captured_file_bytes = f.read()
-            except Exception as e_final:
-                raise RuntimeError(f"データの取得に最終失敗しました: {e_final}")
+        # 9. ファイルの読み込みと解析
+        download_path = download.path()
+        with open(download_path, "rb") as f:
+            file_bytes = f.read()
 
-        # 9. CSVデータの解析
         print("   --> CSVデータを解析し、A〜G列のデータを抽出中...")
-        extracted_data = parse_csv_bytes_get_ag_columns(captured_file_bytes)
+        extracted_data = parse_csv_bytes_get_ag_columns(file_bytes)
         print(f"   --> 抽出件数: {len(extracted_data)} 行")
 
         # 10. スプレッドシート（全従業員シート）へ書き込み
