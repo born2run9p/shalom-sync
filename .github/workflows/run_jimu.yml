@@ -10,7 +10,6 @@ on:
 
 jobs:
   scrape:
-    # 複数台で回すため self-hosted のみに戻す
     runs-on: self-hosted
 
     defaults:
@@ -28,12 +27,11 @@ jobs:
 
       - name: 依存ライブラリのインストールとセットアップ
         run: |
-          # setup-python のパス、またはOS上の python.exe を自動探査
           $py = if ($env:pythonLocation) { "$env:pythonLocation\python.exe" } else { (Get-Command python -ErrorAction SilentlyContinue).Source }
           if (-not $py) { $py = "python" }
-          
+
           & $py -m pip install --upgrade pip
-          & $py -m pip install pandas pyotp selenium gspread google-auth lxml
+          & $py -m pip install pandas pyotp selenium gspread google-auth lxml playwright
           & $py -m playwright install chromium
 
       - name: スクレイピングの実行
