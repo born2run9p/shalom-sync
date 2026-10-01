@@ -12,10 +12,10 @@ jobs:
   scrape:
     runs-on: [self-hosted, PO-TA7]
 
-    # PowerShell 呼び出し時に全ステップで ExecutionPolicy Bypass を強制指定
+    # PowerShell 呼び出し時に全ステップで ExecutionPolicy Bypass を確実に渡す
     defaults:
       run:
-        shell: powershell -ExecutionPolicy Bypass -Command "Invoke-Expression -Command 'Set-Location ''{0}'''; & '{0}'"
+        shell: powershell -ExecutionPolicy Bypass -Command "{0}"
 
     steps:
       - name: コードをチェックアウト
