@@ -14,7 +14,11 @@ on:
 
 jobs:
   scrape:
-    runs-on: self-hosted # ← 成功側と同じ環境に変更
+    runs-on: self-hosted
+
+    defaults:
+      run:
+        shell: powershell -ExecutionPolicy Bypass -Command "{0}"
 
     steps:
       - name: コードをチェックアウト
@@ -27,9 +31,13 @@ jobs:
 
       - name: 依存ライブラリのインストール
         run: |
-          python -m pip install --upgrade pip
-          pip install pandas pyotp selenium gspread google-auth lxml
-          playwright install chromium
+          # setup-python のパス、またはOS上の python.exe を自動探査
+          $py = if ($env:pythonLocation) { "$env:pythonLocation\python.exe" } else { (Get-Command python -ErrorAction SilentlyContinue).Source }
+          if (-not $py) { $py = "python" }
+
+          & $py -m pip install --upgrade pip
+          & $py -m pip install pandas pyotp selenium gspread google-auth lxml playwright
+          & $py -m playwright install chromium
 
       - name: スクレイピングの実行
         env:
@@ -39,4 +47,7 @@ jobs:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
           TARGET_SPREADSHEET_KEY: ${{ secrets.TARGET_SPREADSHEET_KEY }}
         run: |
-          python scrape_employees.py
+          $py = if ($env:pythonLocation) { "$env:pythonLocation\python.exe" } else { (Get-Command python -ErrorAction SilentlyContinue).Source }
+          if (-not $py) { $py = "python" }
+
+          & $py scrape_employees.py
