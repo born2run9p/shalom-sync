@@ -10,12 +10,21 @@ on:
 
 jobs:
   scrape:
-    #PO-TA7 を指定して強制的に新しいPCで実行させる
     runs-on: [self-hosted, PO-TA7]
+
+    # PowerShell 呼び出し時に全ステップで ExecutionPolicy Bypass を強制指定
+    defaults:
+      run:
+        shell: powershell -ExecutionPolicy Bypass -Command "Invoke-Expression -Command 'Set-Location ''{0}'''; & '{0}'"
 
     steps:
       - name: コードをチェックアウト
         uses: actions/checkout@v4
+
+      - name: Python環境のセットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
 
       - name: 依存ライブラリのインストールとセットアップ
         run: |
