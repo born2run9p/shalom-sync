@@ -16,7 +16,9 @@ on:
 jobs:
   scrape:
     runs-on: self-hosted
-
+    defaults:
+      run:
+        shell: powershell -ExecutionPolicy Bypass -Command "Invoke-Expression -Command 'Set-Location ...'; & '{0}'"
     steps:
       - name: コードをチェックアウト
         uses: actions/checkout@v4
