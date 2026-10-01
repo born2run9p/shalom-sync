@@ -10,7 +10,8 @@ on:
 
 jobs:
   scrape:
-    runs-on: self-hosted
+    #PO-TA7 を指定して強制的に新しいPCで実行させる
+    runs-on: [self-hosted, PO-TA7]
 
     steps:
       - name: コードをチェックアウト
